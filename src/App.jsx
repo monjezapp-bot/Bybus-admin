@@ -82,7 +82,7 @@ function LoginScreen() {
         email,
         password,
       });
-      if (authError) throw new Error("فشل تسجيل الدخول: تحقق من البريد وكلمة المرور");
+      if (authError) throw new Error(`فشل تسجيل الدخول (رسالة السيرفر: ${authError.message})`);
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
@@ -124,20 +124,22 @@ function LoginScreen() {
           <label className="block text-sm font-medium text-gray-600 mb-1.5">البريد الإلكتروني</label>
           <input
             type="email"
+            dir="ltr"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="admin@bybus.app"
-            className="w-full rounded-xl border border-gray-200 px-4 py-2.5 mb-4 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+            className="w-full rounded-xl border border-gray-200 px-4 py-2.5 mb-4 text-sm text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
           />
 
           <label className="block text-sm font-medium text-gray-600 mb-1.5">كلمة المرور</label>
           <div className="relative mb-6">
             <input
               type={showPw ? "text" : "password"}
+              dir="ltr"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+              className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
             />
             <button
               type="button"
