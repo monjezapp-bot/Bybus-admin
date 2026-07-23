@@ -1436,6 +1436,534 @@ function EmployeesPage({ avatar }) {
   );
 }
 
+/* ================= قسم المدارس ================= */
+
+function SchoolModal({ school, onClose, onSaved }) {
+  const isEdit = Boolean(school);
+  const [form, setForm] = useState({
+    name: school?.name || "",
+    address_text: school?.address_text || "",
+    location_lat: school?.location_lat ?? "",
+    location_lng: school?.location_lng ?? "",
+    phone: school?.phone || "",
+    whatsapp_number: school?.whatsapp_number || "",
+    external_apply_url: school?.external_apply_url || "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!form.name || !form.location_lat || !form.location_lng) {
+      setError("اسم المدرسة والإحداثيات (خط الطول والعرض) مطلوبين لحساب المسافات بدقة");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name,
+        address_text: form.address_text || null,
+        location_lat: Number(form.location_lat),
+        location_lng: Number(form.location_lng),
+        phone: form.phone || null,
+        whatsapp_number: form.whatsapp_number || null,
+        external_apply_url: form.external_apply_url || null,
+      };
+      const { error: saveError } = isEdit
+        ? await supabase.from("schools").update(payload).eq("id", school.id)
+        : await supabase.from("schools").insert(payload);
+      if (saveError) throw saveError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">{isEdit ? "تعديل بيانات المدرسة" : "إضافة مدرسة جديدة"}</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>اسم المدرسة</label>
+            <input className={inputClass} value={form.name} onChange={(e) => update("name", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>العنوان (نص وصفي)</label>
+            <input className={inputClass} value={form.address_text} onChange={(e) => update("address_text", e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelClass}>خط العرض (Lat)</label>
+              <input dir="ltr" className={inputClass + " text-left"} value={form.location_lat} onChange={(e) => update("location_lat", e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>خط الطول (Lng)</label>
+              <input dir="ltr" className={inputClass + " text-left"} value={form.location_lng} onChange={(e) => update("location_lng", e.target.value)} />
+            </div>
+          </div>
+          <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-[11px] text-gray-500">
+            💡 تقدر تجيب الإحداثيات بسهولة من Google Maps: افتح موقع المدرسة، اضغط مطولاً على المكان بالظبط، وهيظهرلك الرقمين (Lat, Lng) تنسخهم من هنا.
+          </div>
+          <div>
+            <label className={labelClass}>رقم تليفون المدرسة</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>رقم واتساب (للتواصل بخصوص التقديم)</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.whatsapp_number} onChange={(e) => update("whatsapp_number", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>رابط خارجي للتقديم (اختياري)</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.external_apply_url} onChange={(e) => update("external_apply_url", e.target.value)} />
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ الحفظ..." : isEdit ? "حفظ التعديلات" : "إضافة المدرسة"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SchoolsPage({ avatar }) {
+  const [schools, setSchools] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [modalSchool, setModalSchool] = useState(undefined); // undefined = مقفول، null = إضافة، object = تعديل
+
+  const loadSchools = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("schools")
+        .select("id, name, address_text, location_lat, location_lng, phone, whatsapp_number, is_active")
+        .order("name", { ascending: true });
+      if (fetchError) throw fetchError;
+      setSchools(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSchools();
+  }, [loadSchools]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">المدارس</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{schools.length} مدرسة مسجّلة</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setModalSchool(null)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + إضافة مدرسة
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : schools.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش مدارس مسجّلة لسه — دوس "إضافة مدرسة" عشان تبدأ</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {schools.map((s) => (
+              <div
+                key={s.id}
+                onClick={() => setModalSchool(s)}
+                className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer"
+              >
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.mint + "18" }}>
+                  <School size={16} color={COLORS.mint} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-gray-700">{s.name}</div>
+                  <div className="text-xs text-gray-400">{s.address_text || "بدون عنوان نصي"}{s.phone ? ` · ${s.phone}` : ""}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modalSchool !== undefined && (
+        <SchoolModal
+          school={modalSchool}
+          onClose={() => setModalSchool(undefined)}
+          onSaved={() => {
+            setModalSchool(undefined);
+            loadSchools();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= قسم الطلاب ================= */
+
+function StudentModal({ onClose, onCreated }) {
+  const [parentQuery, setParentQuery] = useState("");
+  const [parentResults, setParentResults] = useState([]);
+  const [selectedParent, setSelectedParent] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [schools, setSchools] = useState([]);
+  const [buses, setBuses] = useState([]);
+  const [form, setForm] = useState({
+    full_name: "",
+    grade: "",
+    school_id: "",
+    bus_id: "",
+    home_lat: "",
+    home_lng: "",
+    home_address_text: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadOptions() {
+      const [schoolsRes, busesRes] = await Promise.all([
+        supabase.from("schools").select("id, name").order("name"),
+        supabase.from("buses").select("id, bus_code, plate_number").eq("is_active", true).order("bus_code"),
+      ]);
+      setSchools(schoolsRes.data || []);
+      setBuses(busesRes.data || []);
+    }
+    loadOptions();
+  }, []);
+
+  async function searchParent() {
+    if (!parentQuery.trim()) return;
+    setSearching(true);
+    setError("");
+    try {
+      const { data, error: searchError } = await supabase
+        .from("profiles")
+        .select("id, full_name, phone, email")
+        .eq("role", "parent")
+        .or(`email.ilike.%${parentQuery}%,phone.ilike.%${parentQuery}%,full_name.ilike.%${parentQuery}%`)
+        .limit(5);
+      if (searchError) throw searchError;
+      setParentResults(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!selectedParent) {
+      setError("لازم تختار ولي الأمر الأول (ابحث بالبريد أو رقم التليفون)");
+      return;
+    }
+    if (!form.full_name || !form.school_id) {
+      setError("اسم الطالب والمدرسة مطلوبين");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const { error: insertError } = await supabase.from("students").insert({
+        parent_id: selectedParent.id,
+        school_id: form.school_id,
+        bus_id: form.bus_id || null,
+        full_name: form.full_name,
+        grade: form.grade || null,
+        home_lat: form.home_lat ? Number(form.home_lat) : null,
+        home_lng: form.home_lng ? Number(form.home_lng) : null,
+        home_address_text: form.home_address_text || null,
+      });
+      if (insertError) throw insertError;
+      onCreated();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">تسجيل طالب جديد</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="mb-4">
+          <label className={labelClass}>البحث عن ولي الأمر (بريد إلكتروني أو تليفون أو اسم)</label>
+          <div className="flex gap-2">
+            <input
+              dir="ltr"
+              className={inputClass + " text-left"}
+              value={parentQuery}
+              onChange={(e) => setParentQuery(e.target.value)}
+              placeholder="ابحث..."
+            />
+            <button
+              type="button"
+              onClick={searchParent}
+              disabled={searching}
+              className="rounded-xl px-4 text-sm font-bold text-white shrink-0"
+              style={{ backgroundColor: COLORS.sky }}
+            >
+              {searching ? <Loader2 size={16} className="animate-spin" /> : "بحث"}
+            </button>
+          </div>
+
+          {parentResults.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {parentResults.map((p) => (
+                <button
+                  type="button"
+                  key={p.id}
+                  onClick={() => {
+                    setSelectedParent(p);
+                    setParentResults([]);
+                    setParentQuery(p.full_name);
+                  }}
+                  className="text-right rounded-xl border border-gray-200 p-2.5 text-xs hover:bg-gray-50"
+                >
+                  <div className="font-semibold text-gray-700">{p.full_name}</div>
+                  <div className="text-gray-400" dir="ltr">{p.email || p.phone}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedParent && (
+            <div className="mt-2 rounded-xl bg-sky-50 border border-sky-100 p-2.5 text-xs text-sky-700">
+              ✓ ولي الأمر المختار: {selectedParent.full_name}
+            </div>
+          )}
+
+          {parentResults.length === 0 && !selectedParent && !searching && (
+            <div className="mt-2 text-[11px] text-gray-400">
+              لو مفيش نتايج، معناه ولي الأمر لسه مسجّلش في التطبيق (لازم يسجّل من تطبيق ولي الأمر الأول).
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>اسم الطالب</label>
+            <input className={inputClass} value={form.full_name} onChange={(e) => update("full_name", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>الصف الدراسي</label>
+            <input className={inputClass} value={form.grade} onChange={(e) => update("grade", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>المدرسة</label>
+            <select className={inputClass} value={form.school_id} onChange={(e) => update("school_id", e.target.value)}>
+              <option value="">اختر المدرسة...</option>
+              {schools.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>الباص (اختياري دلوقتي)</label>
+            <select className={inputClass} value={form.bus_id} onChange={(e) => update("bus_id", e.target.value)}>
+              <option value="">بدون تحديد باص الآن</option>
+              {buses.map((b) => (
+                <option key={b.id} value={b.id}>{b.bus_code} · {b.plate_number}</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelClass}>خط عرض المنزل</label>
+              <input dir="ltr" className={inputClass + " text-left"} value={form.home_lat} onChange={(e) => update("home_lat", e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>خط طول المنزل</label>
+              <input dir="ltr" className={inputClass + " text-left"} value={form.home_lng} onChange={(e) => update("home_lng", e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <label className={labelClass}>عنوان المنزل (نص وصفي)</label>
+            <input className={inputClass} value={form.home_address_text} onChange={(e) => update("home_address_text", e.target.value)} />
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ التسجيل..." : "تسجيل الطالب"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function StudentsPage({ avatar }) {
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  const loadStudents = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("students")
+        .select("id, full_name, grade, is_active, profiles(full_name), schools(name), buses(bus_code)")
+        .order("full_name", { ascending: true });
+      if (fetchError) throw fetchError;
+      setStudents(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStudents();
+  }, [loadStudents]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الطلاب</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{students.length} طالب مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + تسجيل طالب
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : students.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش طلاب مسجّلين لسه — دوس "تسجيل طالب" عشان تبدأ</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {students.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                  <Users size={16} color="#B7791F" />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-gray-700">
+                    {s.full_name}{s.grade ? ` · ${s.grade}` : ""}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    ولي الأمر: {s.profiles?.full_name || "—"} · {s.schools?.name || "بدون مدرسة"}
+                    {s.buses?.bus_code ? ` · ${s.buses.bus_code}` : " · بدون باص"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <StudentModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={() => {
+            setShowAddModal(false);
+            loadStudents();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ================= الصفحة الرئيسية ================= */
 
 function Dashboard({ profile }) {
@@ -1538,8 +2066,8 @@ function Dashboard({ profile }) {
           <NavItem icon={Home} label="الرئيسية" active={page === "home"} onClick={() => setPage("home")} />
           <NavItem icon={Bus} label="الباصات" active={page === "buses"} onClick={() => setPage("buses")} />
           <NavItem icon={UserCog} label="الموظفين" active={page === "employees"} onClick={() => setPage("employees")} />
-          <NavItem icon={Users} label="الطلاب" comingSoon />
-          <NavItem icon={School} label="المدارس" comingSoon />
+          <NavItem icon={Users} label="الطلاب" active={page === "students"} onClick={() => setPage("students")} />
+          <NavItem icon={School} label="المدارس" active={page === "schools"} onClick={() => setPage("schools")} />
           <NavItem icon={MapPin} label="الرحلات" comingSoon />
           <NavItem icon={MessageCircle} label="الدردشة" comingSoon />
           <NavItem icon={AlertTriangle} label="التنبيهات" comingSoon />
@@ -1575,6 +2103,30 @@ function Dashboard({ profile }) {
           />
         ) : page === "employees" ? (
           <EmployeesPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "schools" ? (
+          <SchoolsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "students" ? (
+          <StudentsPage
             avatar={
               <div
                 className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
