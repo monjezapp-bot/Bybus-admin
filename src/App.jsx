@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   Bus, Users, MapPin, AlertTriangle, MessageCircle, School,
   LogOut, Settings, Home, Star, Receipt, Eye, EyeOff,
-  Clock, CheckCircle2, RefreshCw, Loader2, AlertCircle
+  Clock, CheckCircle2, RefreshCw, Loader2, AlertCircle, UserCog
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -392,6 +392,9 @@ function BusDetailModal({ busId, onClose, onSaved }) {
   const [error, setError] = useState("");
   const [bus, setBus] = useState(null);
   const [form, setForm] = useState(null);
+  const [availableSupervisors, setAvailableSupervisors] = useState([]);
+  const [availableDrivers, setAvailableDrivers] = useState([]);
+  const [reassigning, setReassigning] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -421,6 +424,24 @@ function BusDetailModal({ busId, onClose, onSaved }) {
           supervisor_full_name: data.profiles?.full_name || "",
           supervisor_phone: data.profiles?.phone || "",
         });
+
+        // موظفين متاحين للاستبدال بالـ ID (مشرفات احتياطية مالهاش باص، سائقين متاحين)
+        const [supervisorsRes, driversRes] = await Promise.all([
+          supabase
+            .from("employee_current_assignment")
+            .select("employee_id, employee_code, full_name")
+            .eq("employee_type", "supervisor")
+            .eq("employment_status", "available")
+            .is("assigned_bus_id", null),
+          supabase
+            .from("employee_current_assignment")
+            .select("employee_id, employee_code, full_name")
+            .eq("employee_type", "driver")
+            .eq("employment_status", "available")
+            .is("assigned_bus_id", null),
+        ]);
+        setAvailableSupervisors(supervisorsRes.data || []);
+        setAvailableDrivers(driversRes.data || []);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -480,6 +501,36 @@ function BusDetailModal({ busId, onClose, onSaved }) {
     }
   }
 
+  async function reassignSupervisor(newProfileId) {
+    if (!newProfileId) return;
+    setReassigning(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase.from("buses").update({ supervisor_id: newProfileId }).eq("id", busId);
+      if (updateError) throw updateError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReassigning(false);
+    }
+  }
+
+  async function reassignDriver(newEmployeeId) {
+    if (!newEmployeeId) return;
+    setReassigning(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase.from("buses").update({ driver_employee_id: newEmployeeId }).eq("id", busId);
+      if (updateError) throw updateError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReassigning(false);
+    }
+  }
+
   const inputClass =
     "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
   const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
@@ -504,6 +555,7 @@ function BusDetailModal({ busId, onClose, onSaved }) {
             <Loader2 size={22} className="animate-spin" />
           </div>
         ) : (
+          <>
           <form onSubmit={handleSave} className="flex flex-col gap-5">
             <div>
               <div className="text-xs font-bold text-gray-400 mb-2">بيانات المشرفة</div>
@@ -575,10 +627,6 @@ function BusDetailModal({ busId, onClose, onSaved }) {
               </div>
             </div>
 
-            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-500">
-              💡 لاستبدال المشرفة أو السائق بموظف تاني موجود بالفعل عن طريق الـ ID (بدل تعديل البيانات هنا)، ده قسم "إدارة الموظفين" اللي هنبنيه كخطوة جاية.
-            </div>
-
             <button
               type="submit"
               disabled={saving}
@@ -589,6 +637,55 @@ function BusDetailModal({ busId, onClose, onSaved }) {
               {saving ? "جارٍ الحفظ..." : "حفظ التعديلات"}
             </button>
           </form>
+
+            <div className="border-t border-gray-100 mt-5 pt-5 flex flex-col gap-4">
+              <div className="text-xs font-bold text-gray-400">استبدال بموظف موجود بالفعل (بالـ ID)</div>
+
+              <div>
+                <label className={labelClass}>استبدال المشرفة (من المشرفات الاحتياطية المتاحة)</label>
+                <select
+                  disabled={reassigning}
+                  defaultValue=""
+                  onChange={(e) => e.target.value && reassignSupervisor(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="" disabled>
+                    {availableSupervisors.length === 0 ? "مفيش مشرفات احتياطية متاحة دلوقتي" : "اختر مشرفة بديلة..."}
+                  </option>
+                  {availableSupervisors.map((s) => (
+                    <option key={s.employee_id} value={s.employee_id}>
+                      {s.employee_code} · {s.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className={labelClass}>استبدال السائق (من السائقين المتاحين)</label>
+                <select
+                  disabled={reassigning}
+                  defaultValue=""
+                  onChange={(e) => e.target.value && reassignDriver(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="" disabled>
+                    {availableDrivers.length === 0 ? "مفيش سائقين متاحين دلوقتي" : "اختر سائق بديل..."}
+                  </option>
+                  {availableDrivers.map((d) => (
+                    <option key={d.employee_id} value={d.employee_id}>
+                      {d.employee_code} · {d.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {reassigning && (
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <Loader2 size={14} className="animate-spin" /> جارٍ تنفيذ الاستبدال...
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -735,6 +832,610 @@ function BusesPage({ profile, avatar }) {
   );
 }
 
+/* ================= قسم الموظفين ================= */
+
+const EMPLOYEE_TYPE_LABELS = {
+  supervisor: "مشرفة",
+  driver: "سائق",
+  admin_staff: "إدارة",
+};
+
+const EMPLOYMENT_STATUS_LABELS = {
+  available: { label: "متاح", color: COLORS.mint },
+  on_leave: { label: "في إجازة", color: COLORS.orange },
+  terminated: { label: "منتهي الخدمة", color: "#9CA3AF" },
+};
+
+function AddEmployeeModal({ onClose, onCreated }) {
+  const [empType, setEmpType] = useState("driver");
+  const [form, setForm] = useState({
+    full_name: "",
+    phone: "",
+    national_id: "",
+    license_number: "",
+    license_expiry: "",
+    email: "",
+    password: "",
+    admin_permission: "support",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+
+    if (!form.full_name) {
+      setError("اسم الموظف مطلوب");
+      return;
+    }
+    if (empType !== "driver" && (!form.email || !form.password)) {
+      setError("البريد الإلكتروني وكلمة المرور مطلوبين لأي حساب بيسجل دخول");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (empType === "driver") {
+        // السائق: بيانات فقط، بدون حساب دخول - إدراج مباشر
+        const { error: insertError } = await supabase.from("employees").insert({
+          employee_type: "driver",
+          job_title: "سائق",
+          full_name: form.full_name,
+          phone: form.phone || null,
+          national_id: form.national_id || null,
+          license_number: form.license_number || null,
+          license_expiry: form.license_expiry || null,
+        });
+        if (insertError) throw insertError;
+      } else if (empType === "supervisor") {
+        // مشرفة احتياطية بدون باص - عن طريق نفس الـ Edge Function، بدون بيانات باص
+        const { data, error: fnError } = await supabase.functions.invoke("create_supervisor_account", {
+          body: {
+            supervisor_email: form.email,
+            supervisor_password: form.password,
+            supervisor_full_name: form.full_name,
+            supervisor_phone: form.phone || null,
+          },
+        });
+        if (fnError) throw fnError;
+        if (data?.error) throw new Error(data.error);
+      } else {
+        // موظف إداري - عن طريق Edge Function مخصصة (متاحة للمدير العام فقط)
+        const { data, error: fnError } = await supabase.functions.invoke("create_admin_account", {
+          body: {
+            email: form.email,
+            password: form.password,
+            full_name: form.full_name,
+            phone: form.phone || null,
+            admin_permission: form.admin_permission,
+          },
+        });
+        if (fnError) throw fnError;
+        if (data?.error) throw new Error(data.error);
+      }
+      onCreated();
+    } catch (err) {
+      setError(err.message || "حصل خطأ غير متوقع");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">إضافة موظف جديد</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        <div className="flex gap-2 mb-5">
+          {[
+            { key: "driver", label: "سائق" },
+            { key: "supervisor", label: "مشرفة احتياطية" },
+            { key: "admin_staff", label: "موظف إدارة" },
+          ].map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setEmpType(t.key)}
+              className="flex-1 rounded-xl py-2 text-xs font-bold border"
+              style={
+                empType === t.key
+                  ? { backgroundColor: COLORS.sky, color: "white", borderColor: COLORS.sky }
+                  : { borderColor: "#E5E7EB", color: "#6B7280" }
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>الاسم الكامل</label>
+            <input className={inputClass} value={form.full_name} onChange={(e) => update("full_name", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>رقم التليفون</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+          </div>
+
+          {empType === "driver" && (
+            <>
+              <div>
+                <label className={labelClass}>الرقم القومي</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.national_id} onChange={(e) => update("national_id", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>رقم رخصة القيادة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.license_number} onChange={(e) => update("license_number", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>تاريخ انتهاء الرخصة</label>
+                <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.license_expiry} onChange={(e) => update("license_expiry", e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {empType !== "driver" && (
+            <>
+              <div>
+                <label className={labelClass}>البريد الإلكتروني (حساب الدخول)</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.email} onChange={(e) => update("email", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>كلمة مرور مؤقتة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.password} onChange={(e) => update("password", e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {empType === "admin_staff" && (
+            <div>
+              <label className={labelClass}>المسمى الوظيفي</label>
+              <select className={inputClass} value={form.admin_permission} onChange={(e) => update("admin_permission", e.target.value)}>
+                <option value="support">مسؤول دعم فني</option>
+                <option value="operations">مسؤول تشغيل</option>
+                <option value="general_manager">مدير عام</option>
+              </select>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ الإنشاء..." : "إضافة الموظف"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EmployeeDetailModal({ employeeId, onClose, onSaved }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [employee, setEmployee] = useState(null);
+  const [form, setForm] = useState(null);
+  const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({ start_date: "", end_date: "", reason: "" });
+  const [savingLeave, setSavingLeave] = useState(false);
+
+  const loadEmployee = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("employees")
+        .select(
+          "id, employee_code, employee_type, job_title, employment_status, full_name, phone, phone_secondary, national_id, license_number, license_expiry, hire_date, contract_end_date, notes, profiles(email)"
+        )
+        .eq("id", employeeId)
+        .single();
+      if (fetchError) throw fetchError;
+      setEmployee(data);
+      setForm({
+        full_name: data.full_name || "",
+        phone: data.phone || "",
+        phone_secondary: data.phone_secondary || "",
+        national_id: data.national_id || "",
+        license_number: data.license_number || "",
+        license_expiry: data.license_expiry || "",
+        hire_date: data.hire_date || "",
+        contract_end_date: data.contract_end_date || "",
+        notes: data.notes || "",
+        employment_status: data.employment_status,
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [employeeId]);
+
+  useEffect(() => {
+    loadEmployee();
+  }, [loadEmployee]);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase
+        .from("employees")
+        .update({
+          full_name: form.full_name,
+          phone: form.phone || null,
+          phone_secondary: form.phone_secondary || null,
+          national_id: form.national_id || null,
+          license_number: form.license_number || null,
+          license_expiry: form.license_expiry || null,
+          hire_date: form.hire_date || null,
+          contract_end_date: form.contract_end_date || null,
+          notes: form.notes || null,
+          employment_status: form.employment_status,
+        })
+        .eq("id", employeeId);
+      if (updateError) throw updateError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSubmitLeave(e) {
+    e.preventDefault();
+    if (!leaveForm.start_date || !leaveForm.end_date) {
+      setError("لازم تحدد تاريخ بداية ونهاية الإجازة");
+      return;
+    }
+    setSavingLeave(true);
+    setError("");
+    try {
+      const { error: leaveError } = await supabase.from("leave_requests").insert({
+        employee_id: employeeId,
+        start_date: leaveForm.start_date,
+        end_date: leaveForm.end_date,
+        reason: leaveForm.reason || null,
+        status: "approved", // الإدارة هي اللي بتسجلها مباشرة، فبتُعتمد فوراً وتُفعّل التنبيه التلقائي
+        reviewed_at: new Date().toISOString(),
+      });
+      if (leaveError) throw leaveError;
+      setShowLeaveForm(false);
+      setLeaveForm({ start_date: "", end_date: "", reason: "" });
+      loadEmployee();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingLeave(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">
+            {loading ? "جارٍ التحميل..." : `${employee?.employee_code} · ${employee?.job_title || EMPLOYEE_TYPE_LABELS[employee?.employee_type]}`}
+          </h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : (
+          <>
+            <form onSubmit={handleSave} className="flex flex-col gap-4">
+              {employee.profiles?.email && <CopyableField label="البريد الإلكتروني (حساب الدخول)" value={employee.profiles.email} />}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className={labelClass}>الاسم الكامل</label>
+                  <input className={inputClass} value={form.full_name} onChange={(e) => update("full_name", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم التليفون</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم تليفون بديل</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.phone_secondary} onChange={(e) => update("phone_secondary", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>الرقم القومي</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.national_id} onChange={(e) => update("national_id", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>الحالة</label>
+                  <select className={inputClass} value={form.employment_status} onChange={(e) => update("employment_status", e.target.value)}>
+                    <option value="available">متاح</option>
+                    <option value="on_leave">في إجازة</option>
+                    <option value="terminated">منتهي الخدمة</option>
+                  </select>
+                </div>
+                {employee.employee_type === "driver" && (
+                  <>
+                    <div>
+                      <label className={labelClass}>رقم رخصة القيادة</label>
+                      <input dir="ltr" className={inputClass + " text-left"} value={form.license_number} onChange={(e) => update("license_number", e.target.value)} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>تاريخ انتهاء الرخصة</label>
+                      <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.license_expiry} onChange={(e) => update("license_expiry", e.target.value)} />
+                    </div>
+                  </>
+                )}
+                <div>
+                  <label className={labelClass}>تاريخ التعيين</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.hire_date} onChange={(e) => update("hire_date", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>تاريخ انتهاء العقد</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.contract_end_date} onChange={(e) => update("contract_end_date", e.target.value)} />
+                </div>
+                <div className="col-span-2">
+                  <label className={labelClass}>ملاحظات</label>
+                  <textarea className={inputClass} rows={2} value={form.notes} onChange={(e) => update("notes", e.target.value)} />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+                style={{ backgroundColor: COLORS.orange }}
+              >
+                {saving && <Loader2 size={16} className="animate-spin" />}
+                {saving ? "جارٍ الحفظ..." : "حفظ التعديلات"}
+              </button>
+            </form>
+
+            <div className="border-t border-gray-100 mt-5 pt-5">
+              {!showLeaveForm ? (
+                <button
+                  onClick={() => setShowLeaveForm(true)}
+                  className="w-full rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50"
+                >
+                  + تسجيل إجازة معتمدة
+                </button>
+              ) : (
+                <form onSubmit={handleSubmitLeave} className="flex flex-col gap-3">
+                  <div className="text-xs font-bold text-gray-400">
+                    تسجيل الإجازة هيحدّث حالة الموظف تلقائياً، ولو مرتبط بباص هيتبعت تنبيه للإدارة فوراً
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>من تاريخ</label>
+                      <input type="date" dir="ltr" className={inputClass + " text-left"} value={leaveForm.start_date} onChange={(e) => setLeaveForm((p) => ({ ...p, start_date: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>إلى تاريخ</label>
+                      <input type="date" dir="ltr" className={inputClass + " text-left"} value={leaveForm.end_date} onChange={(e) => setLeaveForm((p) => ({ ...p, end_date: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelClass}>السبب (اختياري)</label>
+                    <input className={inputClass} value={leaveForm.reason} onChange={(e) => setLeaveForm((p) => ({ ...p, reason: e.target.value }))} />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowLeaveForm(false)}
+                      className="flex-1 rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-500"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingLeave}
+                      className="flex-1 rounded-xl py-2.5 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-70"
+                      style={{ backgroundColor: COLORS.sky }}
+                    >
+                      {savingLeave && <Loader2 size={14} className="animate-spin" />}
+                      اعتماد الإجازة
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmployeesPage({ avatar }) {
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+
+  const loadEmployees = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("employees")
+        .select("id, employee_code, employee_type, job_title, employment_status, full_name, phone")
+        .order("employee_code", { ascending: true });
+      if (fetchError) throw fetchError;
+      setEmployees(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadEmployees();
+  }, [loadEmployees]);
+
+  const filtered = employees.filter((emp) => {
+    const matchesType = typeFilter === "all" || emp.employee_type === typeFilter;
+    const q = search.trim().toLowerCase();
+    const matchesSearch =
+      !q || emp.full_name.toLowerCase().includes(q) || emp.employee_code?.toLowerCase().includes(q) || (emp.phone || "").includes(q);
+    return matchesType && matchesSearch;
+  });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الموظفين</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{employees.length} موظف مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + إضافة موظف
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input
+          placeholder="بحث بالاسم، الكود، أو رقم التليفون"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 min-w-[220px] rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+        />
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm"
+        >
+          <option value="all">كل الأنواع</option>
+          <option value="supervisor">مشرفات</option>
+          <option value="driver">سائقين</option>
+          <option value="admin_staff">إدارة</option>
+        </select>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش نتائج مطابقة</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {filtered.map((emp) => {
+              const statusInfo = EMPLOYMENT_STATUS_LABELS[emp.employment_status] || { label: emp.employment_status, color: "#9CA3AF" };
+              return (
+                <div
+                  key={emp.id}
+                  onClick={() => setSelectedEmployeeId(emp.id)}
+                  className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer"
+                >
+                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                    <Users size={16} color="#B7791F" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">
+                      {emp.employee_code} · {emp.full_name}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {emp.job_title || EMPLOYEE_TYPE_LABELS[emp.employee_type]}
+                      {emp.phone ? ` · ${emp.phone}` : ""}
+                    </div>
+                  </div>
+                  <span
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                    style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
+                  >
+                    {statusInfo.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AddEmployeeModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={() => {
+            setShowAddModal(false);
+            loadEmployees();
+          }}
+        />
+      )}
+
+      {selectedEmployeeId && (
+        <EmployeeDetailModal
+          employeeId={selectedEmployeeId}
+          onClose={() => setSelectedEmployeeId(null)}
+          onSaved={() => {
+            setSelectedEmployeeId(null);
+            loadEmployees();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ================= الصفحة الرئيسية ================= */
 
 function Dashboard({ profile }) {
@@ -836,6 +1537,7 @@ function Dashboard({ profile }) {
         <nav className="flex flex-col gap-1">
           <NavItem icon={Home} label="الرئيسية" active={page === "home"} onClick={() => setPage("home")} />
           <NavItem icon={Bus} label="الباصات" active={page === "buses"} onClick={() => setPage("buses")} />
+          <NavItem icon={UserCog} label="الموظفين" active={page === "employees"} onClick={() => setPage("employees")} />
           <NavItem icon={Users} label="الطلاب" comingSoon />
           <NavItem icon={School} label="المدارس" comingSoon />
           <NavItem icon={MapPin} label="الرحلات" comingSoon />
@@ -861,6 +1563,18 @@ function Dashboard({ profile }) {
         {page === "buses" ? (
           <BusesPage
             profile={profile}
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "employees" ? (
+          <EmployeesPage
             avatar={
               <div
                 className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
