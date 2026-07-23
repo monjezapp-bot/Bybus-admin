@@ -482,4 +482,37 @@ export default function App() {
       const { data, error } = await supabase
         .from("profiles")
         .select("id, full_name, role, admin_permission")
-  
+        .eq("id", currentSession.user.id)
+        .single();
+
+      if (error || !data || data.role !== "admin") {
+        await supabase.auth.signOut();
+        setSession(null);
+        setProfile(null);
+        return;
+      }
+      setProfile(data);
+      setSession(currentSession);
+    }
+
+    // بيتحقق من الجلسة المخزنة أول ما التطبيق يفتح (Auto Login الحقيقي)
+    supabase.auth.getSession().then(({ data }) => loadProfileForSession(data.session));
+
+    // بيتابع أي تغيير في الجلسة (دخول/خروج/تجديد تلقائي للـ Token)
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      loadProfileForSession(currentSession);
+    });
+
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-gray-300 text-sm">جارٍ التحقق من الجلسة...</div>
+      </div>
+    );
+  }
+
+  return session && profile ? <Dashboard profile={profile} /> : <LoginScreen />;
+}
