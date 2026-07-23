@@ -352,11 +352,255 @@ function AddBusModal({ onClose, onCreated }) {
   );
 }
 
+function CopyableField({ label, value, dir = "ltr" }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // بعض المتصفحات بتمنع النسخ من غير تفاعل مباشر؛ الفشل هنا غير حرج
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>
+      <div className="flex items-center gap-2">
+        <div dir={dir} className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-gray-700 truncate">
+          {value || "—"}
+        </div>
+        <button
+          type="button"
+          onClick={handleCopy}
+          disabled={!value}
+          className="rounded-xl border border-gray-200 px-3 py-2.5 text-xs font-bold text-gray-500 hover:bg-gray-50 disabled:opacity-40 shrink-0"
+        >
+          {copied ? "اتنسخت ✓" : "نسخ"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BusDetailModal({ busId, onClose, onSaved }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [bus, setBus] = useState(null);
+  const [form, setForm] = useState(null);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("buses")
+          .select(
+            "id, bus_code, plate_number, vehicle_model, vehicle_capacity, vehicle_license_number, vehicle_license_expiry, company_name, is_active, supervisor_id, driver_employee_id, profiles(id, full_name, phone, email), driver:employees!driver_employee_id(id, full_name, phone, license_number, license_expiry, employee_code)"
+          )
+          .eq("id", busId)
+          .single();
+        if (fetchError) throw fetchError;
+        setBus(data);
+        setForm({
+          plate_number: data.plate_number || "",
+          vehicle_model: data.vehicle_model || "",
+          vehicle_capacity: data.vehicle_capacity ?? "",
+          vehicle_license_number: data.vehicle_license_number || "",
+          vehicle_license_expiry: data.vehicle_license_expiry || "",
+          driver_name: data.driver?.full_name || "",
+          driver_phone: data.driver?.phone || "",
+          driver_license_number: data.driver?.license_number || "",
+          driver_license_expiry: data.driver?.license_expiry || "",
+          company_name: data.company_name || "",
+          supervisor_full_name: data.profiles?.full_name || "",
+          supervisor_phone: data.profiles?.phone || "",
+        });
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [busId]);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { error: busError } = await supabase
+        .from("buses")
+        .update({
+          plate_number: form.plate_number,
+          vehicle_model: form.vehicle_model || null,
+          vehicle_capacity: form.vehicle_capacity ? Number(form.vehicle_capacity) : null,
+          vehicle_license_number: form.vehicle_license_number || null,
+          vehicle_license_expiry: form.vehicle_license_expiry || null,
+          company_name: form.company_name || null,
+        })
+        .eq("id", busId);
+      if (busError) throw busError;
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          full_name: form.supervisor_full_name,
+          phone: form.supervisor_phone || null,
+        })
+        .eq("id", bus.supervisor_id);
+      if (profileError) throw profileError;
+
+      const { error: driverError } = await supabase
+        .from("employees")
+        .update({
+          full_name: form.driver_name,
+          phone: form.driver_phone || null,
+          license_number: form.driver_license_number || null,
+          license_expiry: form.driver_license_expiry || null,
+        })
+        .eq("id", bus.driver_employee_id);
+      if (driverError) throw driverError;
+
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">{loading ? "جارٍ التحميل..." : `تفاصيل ${bus?.bus_code}`}</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : (
+          <form onSubmit={handleSave} className="flex flex-col gap-5">
+            <div>
+              <div className="text-xs font-bold text-gray-400 mb-2">بيانات المشرفة</div>
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className={labelClass}>الاسم</label>
+                  <input className={inputClass} value={form.supervisor_full_name} onChange={(e) => update("supervisor_full_name", e.target.value)} />
+                </div>
+                <CopyableField label="البريد الإلكتروني (حساب الدخول)" value={bus.profiles?.email} />
+                <div>
+                  <label className={labelClass}>رقم التليفون</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_phone} onChange={(e) => update("supervisor_phone", e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs font-bold text-gray-400 mb-2">بيانات المركبة</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelClass}>رقم اللوحة</label>
+                  <input className={inputClass} value={form.plate_number} onChange={(e) => update("plate_number", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>الموديل</label>
+                  <input className={inputClass} value={form.vehicle_model} onChange={(e) => update("vehicle_model", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>السعة</label>
+                  <input type="number" dir="ltr" className={inputClass + " text-left"} value={form.vehicle_capacity} onChange={(e) => update("vehicle_capacity", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>شركة الباص</label>
+                  <input className={inputClass} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم رخصة المركبة</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.vehicle_license_number} onChange={(e) => update("vehicle_license_number", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>تاريخ انتهاء رخصة المركبة</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.vehicle_license_expiry} onChange={(e) => update("vehicle_license_expiry", e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs font-bold text-gray-400 mb-2">بيانات السائق</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <CopyableField label="كود الموظف (السائق)" value={bus.driver?.employee_code} dir="ltr" />
+                </div>
+                <div>
+                  <label className={labelClass}>الاسم</label>
+                  <input className={inputClass} value={form.driver_name} onChange={(e) => update("driver_name", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم التليفون</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.driver_phone} onChange={(e) => update("driver_phone", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم رخصة القيادة</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.driver_license_number} onChange={(e) => update("driver_license_number", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>تاريخ انتهاء رخصة القيادة</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.driver_license_expiry} onChange={(e) => update("driver_license_expiry", e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-500">
+              💡 لاستبدال المشرفة أو السائق بموظف تاني موجود بالفعل عن طريق الـ ID (بدل تعديل البيانات هنا)، ده قسم "إدارة الموظفين" اللي هنبنيه كخطوة جاية.
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+              style={{ backgroundColor: COLORS.orange }}
+            >
+              {saving && <Loader2 size={16} className="animate-spin" />}
+              {saving ? "جارٍ الحفظ..." : "حفظ التعديلات"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BusesPage({ profile, avatar }) {
   const [buses, setBuses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedBusId, setSelectedBusId] = useState(null);
   const [togglingId, setTogglingId] = useState(null);
 
   const loadBuses = useCallback(async () => {
@@ -365,7 +609,7 @@ function BusesPage({ profile, avatar }) {
     try {
       const { data, error: fetchError } = await supabase
         .from("buses")
-        .select("id, bus_code, plate_number, vehicle_model, driver_name, company_name, is_active, profiles(full_name)")
+        .select("id, bus_code, plate_number, vehicle_model, company_name, is_active, profiles(full_name), driver:employees!driver_employee_id(full_name)")
         .order("bus_code", { ascending: true });
       if (fetchError) throw fetchError;
       setBuses(data || []);
@@ -429,7 +673,11 @@ function BusesPage({ profile, avatar }) {
         ) : (
           <div className="flex flex-col gap-2">
             {buses.map((b) => (
-              <div key={b.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+              <div
+                key={b.id}
+                onClick={() => setSelectedBusId(b.id)}
+                className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer"
+              >
                 <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
                   <Bus size={16} color={COLORS.sky} />
                 </div>
@@ -439,12 +687,15 @@ function BusesPage({ profile, avatar }) {
                     {b.vehicle_model ? ` · ${b.vehicle_model}` : ""}
                   </div>
                   <div className="text-xs text-gray-400">
-                    المشرفة: {b.profiles?.full_name || "—"} · السائق: {b.driver_name}
+                    المشرفة: {b.profiles?.full_name || "—"} · السائق: {b.driver?.full_name || "—"}
                     {b.company_name ? ` · ${b.company_name}` : ""}
                   </div>
                 </div>
                 <button
-                  onClick={() => toggleActive(b)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleActive(b);
+                  }}
                   disabled={togglingId === b.id}
                   className="text-[11px] font-bold px-2.5 py-1 rounded-full disabled:opacity-50"
                   style={{
@@ -465,6 +716,17 @@ function BusesPage({ profile, avatar }) {
           onClose={() => setShowAddModal(false)}
           onCreated={() => {
             setShowAddModal(false);
+            loadBuses();
+          }}
+        />
+      )}
+
+      {selectedBusId && (
+        <BusDetailModal
+          busId={selectedBusId}
+          onClose={() => setSelectedBusId(null)}
+          onSaved={() => {
+            setSelectedBusId(null);
             loadBuses();
           }}
         />
