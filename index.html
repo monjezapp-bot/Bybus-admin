@@ -12,6 +12,29 @@
     />
   </head>
   <body class="font-cairo">
+    <script>
+      // عرض أي خطأ برمجي مباشرة على الشاشة بدل صفحة بيضا فاضية
+      // (مهم جداً لأننا بنشتغل من الموبايل من غير أدوات فحص أخطاء المتصفح)
+      window.addEventListener("error", function (e) {
+        showFatalError(e.message + "\n" + (e.filename || "") + ":" + (e.lineno || ""));
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        showFatalError("Promise rejection: " + (e.reason && e.reason.message ? e.reason.message : e.reason));
+      });
+      function showFatalError(text) {
+        var el = document.getElementById("fatal-error-box");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "fatal-error-box";
+          el.style.cssText =
+            "position:fixed;top:0;left:0;right:0;z-index:99999;background:#fee2e2;color:#991b1b;" +
+            "padding:16px;font-family:monospace;font-size:12px;white-space:pre-wrap;direction:ltr;text-align:left;" +
+            "border-bottom:3px solid #ef4444;max-height:60vh;overflow:auto;";
+          document.body.appendChild(el);
+        }
+        el.textContent += "\n\n" + text;
+      }
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
