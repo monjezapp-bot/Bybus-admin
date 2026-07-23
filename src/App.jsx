@@ -190,10 +190,11 @@ function KpiCard({ icon: Icon, label, value, color, sub, loading }) {
   );
 }
 
-function NavItem({ icon: Icon, label, active, comingSoon }) {
+function NavItem({ icon: Icon, label, active, comingSoon, onClick }) {
   return (
     <button
       disabled={comingSoon}
+      onClick={onClick}
       className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
         active ? "text-white" : comingSoon ? "text-gray-300 cursor-not-allowed" : "text-gray-500 hover:bg-gray-50"
       }`}
@@ -208,9 +209,274 @@ function NavItem({ icon: Icon, label, active, comingSoon }) {
   );
 }
 
+/* ================= قسم الباصات ================= */
+
+function AddBusModal({ onClose, onCreated }) {
+  const [form, setForm] = useState({
+    supervisor_email: "",
+    supervisor_password: "",
+    supervisor_full_name: "",
+    supervisor_phone: "",
+    plate_number: "",
+    vehicle_model: "",
+    vehicle_capacity: "",
+    driver_name: "",
+    driver_phone: "",
+    company_name: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  const requiredOk =
+    form.supervisor_email && form.supervisor_password && form.supervisor_full_name && form.plate_number && form.driver_name;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!requiredOk) {
+      setError("لازم تملأ كل الحقول الأساسية: بريد وكلمة مرور واسم المشرفة، رقم اللوحة، واسم السائق");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const { data, error: fnError } = await supabase.functions.invoke("create_supervisor_account", {
+        body: {
+          ...form,
+          vehicle_capacity: form.vehicle_capacity ? Number(form.vehicle_capacity) : null,
+        },
+      });
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+      onCreated();
+    } catch (err) {
+      setError(err.message || "حصل خطأ غير متوقع أثناء إنشاء الباص");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">إضافة باص جديد (حساب المشرفة + السائق + المركبة)</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div>
+            <div className="text-xs font-bold text-gray-400 mb-2">بيانات المشرفة (حساب الدخول)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className={labelClass}>اسم المشرفة</label>
+                <input className={inputClass} value={form.supervisor_full_name} onChange={(e) => update("supervisor_full_name", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>البريد الإلكتروني</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_email} onChange={(e) => update("supervisor_email", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>كلمة مرور مؤقتة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_password} onChange={(e) => update("supervisor_password", e.target.value)} />
+              </div>
+              <div className="col-span-2">
+                <label className={labelClass}>رقم تليفون المشرفة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_phone} onChange={(e) => update("supervisor_phone", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-bold text-gray-400 mb-2">بيانات المركبة</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>رقم اللوحة</label>
+                <input className={inputClass} value={form.plate_number} onChange={(e) => update("plate_number", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>الموديل</label>
+                <input className={inputClass} value={form.vehicle_model} onChange={(e) => update("vehicle_model", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>السعة (عدد الطلاب)</label>
+                <input type="number" dir="ltr" className={inputClass + " text-left"} value={form.vehicle_capacity} onChange={(e) => update("vehicle_capacity", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>اسم شركة الباص</label>
+                <input className={inputClass} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-bold text-gray-400 mb-2">بيانات السائق (بيانات فقط، بدون دخول للتطبيق)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>اسم السائق</label>
+                <input className={inputClass} value={form.driver_name} onChange={(e) => update("driver_name", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>رقم تليفون السائق</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.driver_phone} onChange={(e) => update("driver_phone", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ الإنشاء..." : "إنشاء الباص"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function BusesPage({ profile, avatar }) {
+  const [buses, setBuses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [togglingId, setTogglingId] = useState(null);
+
+  const loadBuses = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("buses")
+        .select("id, bus_code, plate_number, vehicle_model, driver_name, company_name, is_active, profiles(full_name)")
+        .order("bus_code", { ascending: true });
+      if (fetchError) throw fetchError;
+      setBuses(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBuses();
+  }, [loadBuses]);
+
+  async function toggleActive(bus) {
+    setTogglingId(bus.id);
+    try {
+      const { error: updateError } = await supabase.from("buses").update({ is_active: !bus.is_active }).eq("id", bus.id);
+      if (updateError) throw updateError;
+      setBuses((prev) => prev.map((b) => (b.id === bus.id ? { ...b, is_active: !b.is_active } : b)));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الباصات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{buses.length} باص مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + إضافة باص جديد
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : buses.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش باصات مسجّلة لسه — دوس "إضافة باص جديد" عشان تبدأ</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {buses.map((b) => (
+              <div key={b.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
+                  <Bus size={16} color={COLORS.sky} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-gray-700">
+                    {b.bus_code} · {b.plate_number}
+                    {b.vehicle_model ? ` · ${b.vehicle_model}` : ""}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    المشرفة: {b.profiles?.full_name || "—"} · السائق: {b.driver_name}
+                    {b.company_name ? ` · ${b.company_name}` : ""}
+                  </div>
+                </div>
+                <button
+                  onClick={() => toggleActive(b)}
+                  disabled={togglingId === b.id}
+                  className="text-[11px] font-bold px-2.5 py-1 rounded-full disabled:opacity-50"
+                  style={{
+                    backgroundColor: b.is_active ? COLORS.mint + "20" : "#9CA3AF20",
+                    color: b.is_active ? COLORS.mint : "#6B7280",
+                  }}
+                >
+                  {togglingId === b.id ? <Loader2 size={12} className="animate-spin" /> : b.is_active ? "نشط" : "متوقف"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AddBusModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={() => {
+            setShowAddModal(false);
+            loadBuses();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ================= الصفحة الرئيسية ================= */
 
 function Dashboard({ profile }) {
+  const [page, setPage] = useState("home");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -306,8 +572,8 @@ function Dashboard({ profile }) {
         </div>
 
         <nav className="flex flex-col gap-1">
-          <NavItem icon={Home} label="الرئيسية" active />
-          <NavItem icon={Bus} label="الباصات" comingSoon />
+          <NavItem icon={Home} label="الرئيسية" active={page === "home"} onClick={() => setPage("home")} />
+          <NavItem icon={Bus} label="الباصات" active={page === "buses"} onClick={() => setPage("buses")} />
           <NavItem icon={Users} label="الطلاب" comingSoon />
           <NavItem icon={School} label="المدارس" comingSoon />
           <NavItem icon={MapPin} label="الرحلات" comingSoon />
@@ -330,139 +596,156 @@ function Dashboard({ profile }) {
       </aside>
 
       <main className="flex-1 p-6 overflow-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-bold text-gray-800">نظرة عامة</h1>
-            <p className="text-sm text-gray-400 mt-0.5">
-              {new Date().toLocaleDateString("ar-EG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => loadData(true)}
-              disabled={refreshing}
-              className="rounded-xl border border-gray-200 p-2.5 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
-              title="تحديث البيانات"
-            >
-              <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
-            </button>
-            <div
-              className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm"
-              style={{ backgroundColor: COLORS.mint }}
-              title={profile.full_name}
-            >
-              {initials}
-            </div>
-          </div>
-        </div>
-
-        {error && (
-          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
-            <AlertCircle size={16} className="shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-4 mb-6">
-          <KpiCard icon={Bus} label="حافلات نشطة الآن" value={activeBusesNow} color={COLORS.sky} sub={`من إجمالي ${totalBuses}`} loading={loading} />
-          <KpiCard icon={MapPin} label="رحلات جارية" value={activeTripsCount} color={COLORS.mint} sub={`${trips.length} رحلة مجدولة اليوم`} loading={loading} />
-          <KpiCard icon={Users} label="طلاب منقولون اليوم" value={studentsTransported} color={COLORS.sun} loading={loading} />
-          <KpiCard icon={AlertTriangle} label="تنبيهات معلقة" value={alerts.length} color={COLORS.orange} sub={alerts.length > 0 ? "يحتاج مراجعة" : ""} loading={loading} />
-        </div>
-
-        <div className="grid grid-cols-3 gap-4">
-          <div className="col-span-2 bg-white rounded-2xl border border-gray-100 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-bold text-gray-800 text-sm">جدول الرحلات اليومية</h2>
-              <span className="text-xs text-gray-400">{trips.length} رحلة</span>
-            </div>
-
-            {loading ? (
-              <div className="flex items-center justify-center py-10 text-gray-300">
-                <Loader2 size={22} className="animate-spin" />
+        {page === "buses" ? (
+          <BusesPage
+            profile={profile}
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
               </div>
-            ) : trips.length === 0 ? (
-              <div className="text-center py-10 text-sm text-gray-400">مفيش رحلات مجدولة النهاردة</div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {trips.map((t) => {
-                  const statusInfo = STATUS_LABELS[t.status] || { label: t.status, color: "#9CA3AF" };
-                  return (
-                    <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
-                      <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
-                        <Bus size={16} color={COLORS.sky} />
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-sm font-semibold text-gray-700">
-                          {t.buses?.bus_code || "—"} · {t.trip_type === "morning" ? "ذهاب" : "عودة"}
-                        </div>
-                        <div className="text-xs text-gray-400">
-                          {t.buses?.profiles?.full_name || "بدون مشرفة"} · الموعد {t.scheduled_time?.slice(0, 5)}
-                        </div>
-                      </div>
-                      <span
-                        className="text-[11px] font-bold px-2.5 py-1 rounded-full"
-                        style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
-                      >
-                        {statusInfo.label}
-                      </span>
-                    </div>
-                  );
-                })}
+            }
+          />
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h1 className="text-xl font-bold text-gray-800">نظرة عامة</h1>
+                <p className="text-sm text-gray-400 mt-0.5">
+                  {new Date().toLocaleDateString("ar-EG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => loadData(true)}
+                  disabled={refreshing}
+                  className="rounded-xl border border-gray-200 p-2.5 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                  title="تحديث البيانات"
+                >
+                  <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+                </button>
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm"
+                  style={{ backgroundColor: COLORS.mint }}
+                  title={profile.full_name}
+                >
+                  {initials}
+                </div>
+              </div>
+            </div>
+
+            {error && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
               </div>
             )}
-          </div>
 
-          <div className="bg-white rounded-2xl border border-gray-100 p-5">
-            <h2 className="font-bold text-gray-800 text-sm mb-4">التنبيهات الفورية</h2>
+            <div className="flex flex-wrap gap-4 mb-6">
+              <KpiCard icon={Bus} label="حافلات نشطة الآن" value={activeBusesNow} color={COLORS.sky} sub={`من إجمالي ${totalBuses}`} loading={loading} />
+              <KpiCard icon={MapPin} label="رحلات جارية" value={activeTripsCount} color={COLORS.mint} sub={`${trips.length} رحلة مجدولة اليوم`} loading={loading} />
+              <KpiCard icon={Users} label="طلاب منقولون اليوم" value={studentsTransported} color={COLORS.sun} loading={loading} />
+              <KpiCard icon={AlertTriangle} label="تنبيهات معلقة" value={alerts.length} color={COLORS.orange} sub={alerts.length > 0 ? "يحتاج مراجعة" : ""} loading={loading} />
+            </div>
 
-            {loading ? (
-              <div className="flex items-center justify-center py-10 text-gray-300">
-                <Loader2 size={22} className="animate-spin" />
-              </div>
-            ) : alerts.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 text-xs text-gray-400 py-8 text-center">
-                <CheckCircle2 size={20} color={COLORS.mint} />
-                كل الرحلات تسير بشكل طبيعي، مفيش تنبيهات معلقة
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {alerts.map((a) => {
-                  const isUrgent = a.type === "sos";
-                  return (
-                    <div
-                      key={a.id}
-                      className={`p-3 rounded-xl border ${isUrgent ? "border-red-100 bg-red-50" : "border-gray-100"}`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle size={14} color={isUrgent ? COLORS.danger : COLORS.orange} />
-                          <span className={`text-xs font-bold ${isUrgent ? "text-red-500" : "text-gray-700"}`}>
-                            {ALERT_LABELS[a.type] || a.type}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2 bg-white rounded-2xl border border-gray-100 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-bold text-gray-800 text-sm">جدول الرحلات اليومية</h2>
+                  <span className="text-xs text-gray-400">{trips.length} رحلة</span>
+                </div>
+
+                {loading ? (
+                  <div className="flex items-center justify-center py-10 text-gray-300">
+                    <Loader2 size={22} className="animate-spin" />
+                  </div>
+                ) : trips.length === 0 ? (
+                  <div className="text-center py-10 text-sm text-gray-400">مفيش رحلات مجدولة النهاردة</div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {trips.map((t) => {
+                      const statusInfo = STATUS_LABELS[t.status] || { label: t.status, color: "#9CA3AF" };
+                      return (
+                        <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                          <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
+                            <Bus size={16} color={COLORS.sky} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-sm font-semibold text-gray-700">
+                              {t.buses?.bus_code || "—"} · {t.trip_type === "morning" ? "ذهاب" : "عودة"}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {t.buses?.profiles?.full_name || "بدون مشرفة"} · الموعد {t.scheduled_time?.slice(0, 5)}
+                            </div>
+                          </div>
+                          <span
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                            style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
+                          >
+                            {statusInfo.label}
                           </span>
                         </div>
-                        <button
-                          onClick={() => handleResolveAlert(a.id)}
-                          disabled={resolvingId === a.id}
-                          className="text-[10px] font-bold text-gray-400 hover:text-gray-600 disabled:opacity-50"
-                        >
-                          {resolvingId === a.id ? <Loader2 size={12} className="animate-spin" /> : "تم الحل"}
-                        </button>
-                      </div>
-                      <div className="text-[11px] text-gray-400 flex items-center gap-2">
-                        <span>{a.buses?.bus_code || "—"}</span>
-                        <span className="flex items-center gap-1">
-                          <Clock size={10} />
-                          {new Date(a.created_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 p-5">
+                <h2 className="font-bold text-gray-800 text-sm mb-4">التنبيهات الفورية</h2>
+
+                {loading ? (
+                  <div className="flex items-center justify-center py-10 text-gray-300">
+                    <Loader2 size={22} className="animate-spin" />
+                  </div>
+                ) : alerts.length === 0 ? (
+                  <div className="flex flex-col items-center gap-2 text-xs text-gray-400 py-8 text-center">
+                    <CheckCircle2 size={20} color={COLORS.mint} />
+                    كل الرحلات تسير بشكل طبيعي، مفيش تنبيهات معلقة
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {alerts.map((a) => {
+                      const isUrgent = a.type === "sos";
+                      return (
+                        <div
+                          key={a.id}
+                          className={`p-3 rounded-xl border ${isUrgent ? "border-red-100 bg-red-50" : "border-gray-100"}`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <div className="flex items-center gap-2">
+                              <AlertTriangle size={14} color={isUrgent ? COLORS.danger : COLORS.orange} />
+                              <span className={`text-xs font-bold ${isUrgent ? "text-red-500" : "text-gray-700"}`}>
+                                {ALERT_LABELS[a.type] || a.type}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handleResolveAlert(a.id)}
+                              disabled={resolvingId === a.id}
+                              className="text-[10px] font-bold text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                            >
+                              {resolvingId === a.id ? <Loader2 size={12} className="animate-spin" /> : "تم الحل"}
+                            </button>
+                          </div>
+                          <div className="text-[11px] text-gray-400 flex items-center gap-2">
+                            <span>{a.buses?.bus_code || "—"}</span>
+                            <span className="flex items-center gap-1">
+                              <Clock size={10} />
+                              {new Date(a.created_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </main>
     </div>
   );
