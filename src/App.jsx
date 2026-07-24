@@ -4,6 +4,9 @@ import {
   LogOut, Settings, Home, Star, Receipt, Eye, EyeOff,
   Clock, CheckCircle2, RefreshCw, Loader2, AlertCircle, UserCog
 } from "lucide-react";
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { supabase } from "./supabaseClient";
 
 /*
@@ -381,6 +384,90 @@ function CopyableField({ label, value, dir = "ltr" }) {
         >
           {copied ? "اتنسخت ✓" : "نسخ"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+const pinIcon = new L.DivIcon({
+  html: '<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 2px rgba(0,0,0,0.3))">📍</div>',
+  className: "",
+  iconSize: [30, 30],
+  iconAnchor: [15, 30],
+});
+
+function MapClickHandler({ onPick }) {
+  useMapEvents({
+    click(e) {
+      onPick(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+function MapRecenter({ lat, lng }) {
+  const map = useMap();
+  useEffect(() => {
+    if (lat != null && lng != null) {
+      map.setView([lat, lng], Math.max(map.getZoom(), 15));
+    }
+  }, [lat, lng]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+function LocationPicker({ lat, lng, onChange }) {
+  const [linkInput, setLinkInput] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const cairoCenter = [30.0444, 31.2357]; // نقطة بداية افتراضية (القاهرة) لحد ما يتحدد موقع فعلي
+
+  function handleLinkSubmit() {
+    setLinkError("");
+    if (!linkInput.trim()) return;
+    const patterns = [/@(-?\d+\.\d+),(-?\d+\.\d+)/, /[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/, /[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/];
+    for (const p of patterns) {
+      const m = linkInput.match(p);
+      if (m) {
+        onChange(parseFloat(m[1]), parseFloat(m[2]));
+        setLinkInput("");
+        return;
+      }
+    }
+    setLinkError("مقدرتش أفهم اللينك ده. جرب تدوس على المكان في الخريطة مباشرة بدل كده");
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1.5">الموقع على الخريطة</label>
+      <div className="flex gap-2 mb-2">
+        <input
+          dir="ltr"
+          placeholder="أو الصق رابط Google Maps هنا"
+          value={linkInput}
+          onChange={(e) => setLinkInput(e.target.value)}
+          className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-xs text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
+        />
+        <button
+          type="button"
+          onClick={handleLinkSubmit}
+          className="rounded-xl px-3 text-xs font-bold text-white shrink-0"
+          style={{ backgroundColor: COLORS.sky }}
+        >
+          تحديد
+        </button>
+      </div>
+      {linkError && <div className="text-[11px] text-red-500 mb-2">{linkError}</div>}
+
+      <div className="rounded-xl overflow-hidden border border-gray-200" style={{ height: 220 }}>
+        <MapContainer center={lat != null && lng != null ? [lat, lng] : cairoCenter} zoom={lat != null && lng != null ? 15 : 6} style={{ height: "100%", width: "100%" }}>
+          <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <MapClickHandler onPick={onChange} />
+          {lat != null && lng != null && <Marker position={[lat, lng]} icon={pinIcon} />}
+          <MapRecenter lat={lat} lng={lng} />
+        </MapContainer>
+      </div>
+
+      <div className="text-[11px] text-gray-400 mt-1.5">
+        {lat != null && lng != null ? `الموقع المحدد: ${lat.toFixed(5)}, ${lng.toFixed(5)}` : "دوس على المكان بالظبط في الخريطة لتحديد الموقع"}
       </div>
     </div>
   );
@@ -1514,19 +1601,14 @@ function SchoolModal({ school, onClose, onSaved }) {
             <label className={labelClass}>العنوان (نص وصفي)</label>
             <input className={inputClass} value={form.address_text} onChange={(e) => update("address_text", e.target.value)} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>خط العرض (Lat)</label>
-              <input dir="ltr" className={inputClass + " text-left"} value={form.location_lat} onChange={(e) => update("location_lat", e.target.value)} />
-            </div>
-            <div>
-              <label className={labelClass}>خط الطول (Lng)</label>
-              <input dir="ltr" className={inputClass + " text-left"} value={form.location_lng} onChange={(e) => update("location_lng", e.target.value)} />
-            </div>
-          </div>
-          <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-[11px] text-gray-500">
-            💡 تقدر تجيب الإحداثيات بسهولة من Google Maps: افتح موقع المدرسة، اضغط مطولاً على المكان بالظبط، وهيظهرلك الرقمين (Lat, Lng) تنسخهم من هنا.
-          </div>
+          <LocationPicker
+            lat={form.location_lat === "" ? null : Number(form.location_lat)}
+            lng={form.location_lng === "" ? null : Number(form.location_lng)}
+            onChange={(newLat, newLng) => {
+              update("location_lat", newLat);
+              update("location_lng", newLng);
+            }}
+          />
           <div>
             <label className={labelClass}>رقم تليفون المدرسة</label>
             <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
@@ -1839,16 +1921,14 @@ function StudentModal({ onClose, onCreated }) {
               ))}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>خط عرض المنزل</label>
-              <input dir="ltr" className={inputClass + " text-left"} value={form.home_lat} onChange={(e) => update("home_lat", e.target.value)} />
-            </div>
-            <div>
-              <label className={labelClass}>خط طول المنزل</label>
-              <input dir="ltr" className={inputClass + " text-left"} value={form.home_lng} onChange={(e) => update("home_lng", e.target.value)} />
-            </div>
-          </div>
+          <LocationPicker
+            lat={form.home_lat === "" ? null : Number(form.home_lat)}
+            lng={form.home_lng === "" ? null : Number(form.home_lng)}
+            onChange={(newLat, newLng) => {
+              update("home_lat", newLat);
+              update("home_lng", newLng);
+            }}
+          />
           <div>
             <label className={labelClass}>عنوان المنزل (نص وصفي)</label>
             <input className={inputClass} value={form.home_address_text} onChange={(e) => update("home_address_text", e.target.value)} />
