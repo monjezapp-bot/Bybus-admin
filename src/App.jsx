@@ -482,6 +482,8 @@ function BusDetailModal({ busId, onClose, onSaved }) {
   const [availableSupervisors, setAvailableSupervisors] = useState([]);
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [reassigning, setReassigning] = useState(false);
+  const [schedule, setSchedule] = useState({}); // { [dayIndex]: { morning: "07:00", evening: "14:00" } }
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -529,6 +531,18 @@ function BusDetailModal({ busId, onClose, onSaved }) {
         ]);
         setAvailableSupervisors(supervisorsRes.data || []);
         setAvailableDrivers(driversRes.data || []);
+
+        const { data: scheduleRows, error: scheduleError } = await supabase
+          .from("bus_shift_schedules")
+          .select("day_of_week, trip_type, scheduled_time")
+          .eq("bus_id", busId);
+        if (scheduleError) throw scheduleError;
+        const scheduleMap = {};
+        (scheduleRows || []).forEach((r) => {
+          scheduleMap[r.day_of_week] = scheduleMap[r.day_of_week] || {};
+          scheduleMap[r.day_of_week][r.trip_type] = r.scheduled_time?.slice(0, 5);
+        });
+        setSchedule(scheduleMap);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -615,6 +629,53 @@ function BusDetailModal({ busId, onClose, onSaved }) {
       setError(err.message);
     } finally {
       setReassigning(false);
+    }
+  }
+
+  function updateScheduleTime(dayIndex, tripType, time) {
+    setSchedule((prev) => ({
+      ...prev,
+      [dayIndex]: { ...prev[dayIndex], [tripType]: time },
+    }));
+  }
+
+  async function handleSaveSchedule() {
+    setSavingSchedule(true);
+    setError("");
+    try {
+      const upserts = [];
+      const deletions = [];
+      for (let day = 0; day <= 6; day++) {
+        for (const tripType of ["morning", "evening"]) {
+          const time = schedule[day]?.[tripType];
+          if (time) {
+            upserts.push({ bus_id: busId, day_of_week: day, trip_type: tripType, scheduled_time: time, is_active: true });
+          } else {
+            deletions.push({ day, tripType });
+          }
+        }
+      }
+
+      if (upserts.length > 0) {
+        const { error: upsertError } = await supabase
+          .from("bus_shift_schedules")
+          .upsert(upserts, { onConflict: "bus_id,trip_type,day_of_week" });
+        if (upsertError) throw upsertError;
+      }
+
+      // حذف أي موعد اتشال من الفورم (كان موجود قبل كده وبقى فاضي)
+      for (const d of deletions) {
+        await supabase
+          .from("bus_shift_schedules")
+          .delete()
+          .eq("bus_id", busId)
+          .eq("day_of_week", d.day)
+          .eq("trip_type", d.tripType);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingSchedule(false);
     }
   }
 
@@ -771,6 +832,50 @@ function BusDetailModal({ busId, onClose, onSaved }) {
                   <Loader2 size={14} className="animate-spin" /> جارٍ تنفيذ الاستبدال...
                 </div>
               )}
+            </div>
+
+            <div className="border-t border-gray-100 mt-5 pt-5">
+              <div className="text-xs font-bold text-gray-400 mb-3">
+                مواعيد الرحلات الأسبوعية (منها بيتولد جدول اليوم تلقائياً كل يوم)
+              </div>
+              <div className="flex flex-col gap-2">
+                {["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"].map((dayName, dayIndex) => (
+                  <div key={dayIndex} className="grid grid-cols-3 items-center gap-2">
+                    <span className="text-xs text-gray-500">{dayName}</span>
+                    <input
+                      type="time"
+                      dir="ltr"
+                      value={schedule[dayIndex]?.morning || ""}
+                      onChange={(e) => updateScheduleTime(dayIndex, "morning", e.target.value)}
+                      className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-left"
+                      title="ذهاب"
+                    />
+                    <input
+                      type="time"
+                      dir="ltr"
+                      value={schedule[dayIndex]?.evening || ""}
+                      onChange={(e) => updateScheduleTime(dayIndex, "evening", e.target.value)}
+                      className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-left"
+                      title="عودة"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
+                <span></span>
+                <span>ذهاب</span>
+                <span>عودة</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveSchedule}
+                disabled={savingSchedule}
+                className="w-full rounded-xl py-2.5 text-sm font-semibold mt-3 flex items-center justify-center gap-2 disabled:opacity-70"
+                style={{ backgroundColor: COLORS.sky, color: "white" }}
+              >
+                {savingSchedule && <Loader2 size={14} className="animate-spin" />}
+                {savingSchedule ? "جارٍ الحفظ..." : "حفظ المواعيد"}
+              </button>
             </div>
           </>
         )}
