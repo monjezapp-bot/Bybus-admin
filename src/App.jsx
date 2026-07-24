@@ -2151,6 +2151,500 @@ function StudentsPage({ avatar }) {
 
 /* ================= الصفحة الرئيسية ================= */
 
+/* ================= قسم الدردشة (صندوق الدعم الفني) ================= */
+
+function ChatThread({ conversationId, profile, onClaimed }) {
+  const [conversation, setConversation] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [newMessage, setNewMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [claiming, setClaiming] = useState(false);
+
+  const loadThread = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [convRes, msgsRes] = await Promise.all([
+        supabase.from("conversations").select("id, participant_a_id, participant_b_id, status, profiles!conversations_participant_a_id_fkey(full_name)").eq("id", conversationId).single(),
+        supabase.from("messages").select("id, sender_id, content, created_at").eq("conversation_id", conversationId).order("created_at", { ascending: true }),
+      ]);
+      if (convRes.error) throw convRes.error;
+      if (msgsRes.error) throw msgsRes.error;
+      setConversation(convRes.data);
+      setMessages(msgsRes.data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
+    loadThread();
+    const channel = supabase
+      .channel(`chat-${conversationId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `conversation_id=eq.${conversationId}` }, () => loadThread())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [conversationId, loadThread]);
+
+  async function handleClaim() {
+    setClaiming(true);
+    try {
+      const { error: claimError } = await supabase
+        .from("conversations")
+        .update({ participant_b_id: profile.id })
+        .eq("id", conversationId);
+      if (claimError) throw claimError;
+      loadThread();
+      onClaimed();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setClaiming(false);
+    }
+  }
+
+  async function handleSend(e) {
+    e.preventDefault();
+    if (!newMessage.trim()) return;
+    setSending(true);
+    setError("");
+    try {
+      const { error: sendError } = await supabase.from("messages").insert({
+        conversation_id: conversationId,
+        sender_id: profile.id,
+        content: newMessage.trim(),
+      });
+      if (sendError) throw sendError;
+      setNewMessage("");
+      loadThread();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-300">
+        <Loader2 size={22} className="animate-spin" />
+      </div>
+    );
+  }
+
+  const isClaimed = Boolean(conversation?.participant_b_id);
+  const isMine = conversation?.participant_b_id === profile.id;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="p-4 border-b border-gray-100">
+        <div className="font-semibold text-gray-700 text-sm">{conversation?.profiles?.full_name || "مستخدم"}</div>
+        {!isClaimed && (
+          <button
+            onClick={handleClaim}
+            disabled={claiming}
+            className="mt-2 text-xs font-bold rounded-lg px-3 py-1.5 text-white flex items-center gap-1.5"
+            style={{ backgroundColor: COLORS.sky }}
+          >
+            {claiming && <Loader2 size={12} className="animate-spin" />}
+            استلام المحادثة
+          </button>
+        )}
+        {isClaimed && !isMine && <div className="mt-1 text-[11px] text-gray-400">المحادثة دي مستلمة من موظف تاني بالفعل</div>}
+      </div>
+
+      {error && (
+        <div className="mx-4 mt-3 flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-auto p-4 flex flex-col gap-2">
+        {messages.length === 0 ? (
+          <div className="text-center text-xs text-gray-400 py-6">لسه مفيش رسايل في المحادثة دي</div>
+        ) : (
+          messages.map((m) => {
+            const fromMe = m.sender_id === profile.id;
+            return (
+              <div key={m.id} className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${fromMe ? "self-start text-white" : "self-end bg-gray-100 text-gray-700"}`} style={fromMe ? { backgroundColor: COLORS.sky } : {}}>
+                {m.content}
+                <div className={`text-[10px] mt-1 ${fromMe ? "text-white/70" : "text-gray-400"}`}>
+                  {new Date(m.created_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <form onSubmit={handleSend} className="p-4 border-t border-gray-100 flex gap-2">
+        <input
+          value={newMessage}
+          onChange={(e) => setNewMessage(e.target.value)}
+          disabled={!isMine}
+          placeholder={isMine ? "اكتب رسالتك..." : "استلم المحادثة الأول عشان تقدر ترد"}
+          className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300 disabled:bg-gray-50"
+        />
+        <button
+          type="submit"
+          disabled={!isMine || sending || !newMessage.trim()}
+          className="rounded-xl px-4 text-white text-sm font-bold disabled:opacity-50"
+          style={{ backgroundColor: COLORS.orange }}
+        >
+          {sending ? <Loader2 size={16} className="animate-spin" /> : "إرسال"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function ChatPage({ profile, avatar }) {
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+
+  const loadConversations = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("conversations")
+        .select("id, status, participant_b_id, updated_at, profiles!conversations_participant_a_id_fkey(full_name)")
+        .eq("type", "support")
+        .order("updated_at", { ascending: false });
+      if (fetchError) throw fetchError;
+      setConversations(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">صندوق الدعم الفني</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{conversations.length} محادثة</p>
+        </div>
+        {avatar}
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden" style={{ height: 520 }}>
+        <div className="flex h-full">
+          <div className="w-72 border-l border-gray-100 overflow-auto shrink-0">
+            {loading ? (
+              <div className="flex items-center justify-center h-full text-gray-300">
+                <Loader2 size={22} className="animate-spin" />
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="text-center text-xs text-gray-400 p-6">
+                مفيش محادثات دعم لسه — هتظهر هنا أول ما مستخدم يبعت رسالة من تطبيق المشرفة أو ولي الأمر
+              </div>
+            ) : (
+              conversations.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedId(c.id)}
+                  className={`w-full text-right p-3.5 border-b border-gray-50 hover:bg-gray-50 ${selectedId === c.id ? "bg-sky-50" : ""}`}
+                >
+                  <div className="text-sm font-semibold text-gray-700">{c.profiles?.full_name || "مستخدم"}</div>
+                  <div className="text-[11px] text-gray-400 mt-0.5">
+                    {c.participant_b_id ? "مستلمة" : "بانتظار الاستلام"}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="flex-1">
+            {selectedId ? (
+              <ChatThread conversationId={selectedId} profile={profile} onClaimed={loadConversations} />
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-gray-300">اختر محادثة من القايمة</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= قسم الرحلات ================= */
+
+function TripsPage({ avatar }) {
+  const [trips, setTrips] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [dateFilter, setDateFilter] = useState(todayStr());
+  const [updatingId, setUpdatingId] = useState(null);
+
+  const loadTrips = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("trips")
+        .select(
+          "id, trip_type, status, scheduled_time, started_at, ended_at, buses(bus_code, plate_number, profiles(full_name))"
+        )
+        .eq("trip_date", dateFilter)
+        .order("scheduled_time", { ascending: true });
+      if (fetchError) throw fetchError;
+      setTrips(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [dateFilter]);
+
+  useEffect(() => {
+    loadTrips();
+  }, [loadTrips]);
+
+  async function markCancelled(tripId) {
+    setUpdatingId(tripId);
+    try {
+      const { error: updateError } = await supabase.from("trips").update({ status: "cancelled" }).eq("id", tripId);
+      if (updateError) throw updateError;
+      setTrips((prev) => prev.map((t) => (t.id === tripId ? { ...t, status: "cancelled" } : t)));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الرحلات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{trips.length} رحلة في اليوم المحدد</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="date"
+            dir="ltr"
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+            className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-left"
+          />
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : trips.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">
+            مفيش رحلات في اليوم ده — الرحلات بتتولد تلقائياً من مواعيد الباصات الأسبوعية
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {trips.map((t) => {
+              const statusInfo = STATUS_LABELS[t.status] || { label: t.status, color: "#9CA3AF" };
+              return (
+                <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
+                    <Bus size={16} color={COLORS.sky} />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">
+                      {t.buses?.bus_code || "—"} · {t.trip_type === "morning" ? "ذهاب" : "عودة"}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {t.buses?.profiles?.full_name || "بدون مشرفة"} · الموعد {t.scheduled_time?.slice(0, 5)}
+                      {t.started_at && ` · بدأت ${new Date(t.started_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}`}
+                      {t.ended_at && ` · انتهت ${new Date(t.ended_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}`}
+                    </div>
+                  </div>
+                  <span
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                    style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
+                  >
+                    {statusInfo.label}
+                  </span>
+                  {(t.status === "scheduled" || t.status === "delayed") && (
+                    <button
+                      onClick={() => markCancelled(t.id)}
+                      disabled={updatingId === t.id}
+                      className="text-[11px] font-bold text-gray-400 hover:text-red-500 disabled:opacity-50"
+                    >
+                      {updatingId === t.id ? <Loader2 size={12} className="animate-spin" /> : "إلغاء"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= قسم الإعدادات ================= */
+
+function SettingsPage({ avatar }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [form, setForm] = useState({ company_name: "", support_phone: "", trip_delay_grace_minutes: 15 });
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("app_settings")
+          .select("company_name, support_phone, trip_delay_grace_minutes")
+          .single();
+        if (fetchError) throw fetchError;
+        setForm({
+          company_name: data.company_name || "",
+          support_phone: data.support_phone || "",
+          trip_delay_grace_minutes: data.trip_delay_grace_minutes ?? 15,
+        });
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+    setSaved(false);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase
+        .from("app_settings")
+        .update({
+          company_name: form.company_name,
+          support_phone: form.support_phone || null,
+          trip_delay_grace_minutes: Number(form.trip_delay_grace_minutes),
+        })
+        .eq("id", true);
+      if (updateError) throw updateError;
+      setSaved(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الإعدادات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">إعدادات عامة للنظام</p>
+        </div>
+        {avatar}
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {saved && (
+        <div className="flex items-center gap-2 bg-green-50 border border-green-100 text-green-600 text-xs rounded-xl p-3 mb-4">
+          <CheckCircle2 size={16} className="shrink-0" />
+          <span>تم حفظ الإعدادات بنجاح</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5 max-w-lg">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div>
+              <label className={labelClass}>اسم الشركة/المنشأة</label>
+              <input className={inputClass} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>رقم الدعم الفني</label>
+              <input dir="ltr" className={inputClass + " text-left"} value={form.support_phone} onChange={(e) => update("support_phone", e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>فترة الأمان قبل اعتبار الرحلة متأخرة (بالدقايق)</label>
+              <input
+                type="number"
+                dir="ltr"
+                min="1"
+                className={inputClass + " text-left"}
+                value={form.trip_delay_grace_minutes}
+                onChange={(e) => update("trip_delay_grace_minutes", e.target.value)}
+              />
+              <div className="text-[11px] text-gray-400 mt-1.5">
+                لو الرحلة عدّت ميعادها بالمدة دي ولسه ما بدأتش، النظام يعلّمها "متأخرة" ويبعت تنبيه للإدارة تلقائياً (بيتفحص كل 5 دقايق).
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+              style={{ backgroundColor: COLORS.orange }}
+            >
+              {saving && <Loader2 size={16} className="animate-spin" />}
+              {saving ? "جارٍ الحفظ..." : "حفظ الإعدادات"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ profile }) {
   const [page, setPage] = useState("home");
   const [loading, setLoading] = useState(true);
@@ -2253,15 +2747,15 @@ function Dashboard({ profile }) {
           <NavItem icon={UserCog} label="الموظفين" active={page === "employees"} onClick={() => setPage("employees")} />
           <NavItem icon={Users} label="الطلاب" active={page === "students"} onClick={() => setPage("students")} />
           <NavItem icon={School} label="المدارس" active={page === "schools"} onClick={() => setPage("schools")} />
-          <NavItem icon={MapPin} label="الرحلات" comingSoon />
-          <NavItem icon={MessageCircle} label="الدردشة" comingSoon />
+          <NavItem icon={MapPin} label="الرحلات" active={page === "trips"} onClick={() => setPage("trips")} />
+          <NavItem icon={MessageCircle} label="الدردشة" active={page === "chat"} onClick={() => setPage("chat")} />
           <NavItem icon={AlertTriangle} label="التنبيهات" comingSoon />
           <NavItem icon={Receipt} label="الاشتراكات" comingSoon />
           <NavItem icon={Star} label="التقييمات" comingSoon />
         </nav>
 
         <div className="mt-auto flex flex-col gap-1">
-          <NavItem icon={Settings} label="الإعدادات" comingSoon />
+          <NavItem icon={Settings} label="الإعدادات" active={page === "settings"} onClick={() => setPage("settings")} />
           <button
             onClick={() => supabase.auth.signOut()}
             className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-400 hover:bg-gray-50"
@@ -2312,6 +2806,43 @@ function Dashboard({ profile }) {
           />
         ) : page === "students" ? (
           <StudentsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "chat" ? (
+          <ChatPage
+            profile={profile}
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "trips" ? (
+          <TripsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "settings" ? (
+          <SettingsPage
             avatar={
               <div
                 className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
