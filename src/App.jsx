@@ -2151,6 +2151,356 @@ function StudentsPage({ avatar }) {
 
 /* ================= الصفحة الرئيسية ================= */
 
+/* ================= قسم الاشتراكات ================= */
+
+const SUBSCRIPTION_STATUS_LABELS = {
+  active: { label: "نشط", color: COLORS.mint },
+  expired: { label: "منتهي", color: COLORS.orange },
+  cancelled: { label: "ملغي", color: "#9CA3AF" },
+  pending: { label: "بانتظار أول دفعة", color: COLORS.sun },
+};
+
+function AddSubscriptionModal({ onClose, onCreated }) {
+  const [students, setStudents] = useState([]);
+  const [form, setForm] = useState({ student_id: "", price: "", start_date: todayStr() });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadStudents() {
+      const { data } = await supabase.from("students").select("id, full_name, parent_id, profiles(full_name)").eq("is_active", true);
+      setStudents(data || []);
+    }
+    loadStudents();
+  }, []);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const student = students.find((s) => s.id === form.student_id);
+    if (!student || !form.price || !form.start_date) {
+      setError("لازم تختار الطالب وتحدد السعر وتاريخ البداية");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const startDate = new Date(form.start_date);
+      const renewalDate = new Date(startDate);
+      renewalDate.setMonth(renewalDate.getMonth() + 1); // دورة شهرية
+
+      const { error: insertError } = await supabase.from("subscriptions").insert({
+        parent_id: student.parent_id,
+        student_id: form.student_id,
+        price: Number(form.price),
+        start_date: form.start_date,
+        renewal_date: renewalDate.toISOString().slice(0, 10),
+        status: "active",
+      });
+      if (insertError) throw insertError;
+      onCreated();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">تسجيل اشتراك جديد</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>الطالب</label>
+            <select className={inputClass} value={form.student_id} onChange={(e) => update("student_id", e.target.value)}>
+              <option value="">اختر الطالب...</option>
+              {students.map((s) => (
+                <option key={s.id} value={s.id}>{s.full_name} · ولي الأمر: {s.profiles?.full_name}</option>
+              ))}
+            </select>
+            {students.length === 0 && <div className="text-[11px] text-gray-400 mt-1.5">مفيش طلاب مسجّلين لسه</div>}
+          </div>
+          <div>
+            <label className={labelClass}>سعر الاشتراك الشهري (جنيه)</label>
+            <input type="number" dir="ltr" className={inputClass + " text-left"} value={form.price} onChange={(e) => update("price", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>تاريخ بداية الاشتراك</label>
+            <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.start_date} onChange={(e) => update("start_date", e.target.value)} />
+            <div className="text-[11px] text-gray-400 mt-1.5">تاريخ التجديد هيتحدد تلقائياً بعد شهر من تاريخ البداية</div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ التسجيل..." : "تسجيل الاشتراك"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionDetailModal({ subscriptionId, onClose, onSaved }) {
+  const [subscription, setSubscription] = useState(null);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [recordingPayment, setRecordingPayment] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [subRes, invRes] = await Promise.all([
+        supabase.from("subscriptions").select("id, price, status, start_date, renewal_date, students(full_name), profiles(full_name)").eq("id", subscriptionId).single(),
+        supabase.from("invoices").select("id, invoice_number, amount, status, issued_at, paid_at").eq("subscription_id", subscriptionId).order("issued_at", { ascending: false }),
+      ]);
+      if (subRes.error) throw subRes.error;
+      if (invRes.error) throw invRes.error;
+      setSubscription(subRes.data);
+      setInvoices(invRes.data || []);
+      setPaymentAmount(String(subRes.data.price));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [subscriptionId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  async function handleRecordPayment() {
+    if (!paymentAmount) return;
+    setRecordingPayment(true);
+    setError("");
+    try {
+      const { error: invoiceError } = await supabase.from("invoices").insert({
+        subscription_id: subscriptionId,
+        amount: Number(paymentAmount),
+        status: "paid",
+        paid_at: new Date().toISOString(),
+      });
+      if (invoiceError) throw invoiceError;
+
+      const newRenewal = new Date(subscription.renewal_date);
+      newRenewal.setMonth(newRenewal.getMonth() + 1);
+
+      const { error: subError } = await supabase
+        .from("subscriptions")
+        .update({ status: "active", renewal_date: newRenewal.toISOString().slice(0, 10) })
+        .eq("id", subscriptionId);
+      if (subError) throw subError;
+
+      loadData();
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRecordingPayment(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">{loading ? "جارٍ التحميل..." : subscription?.students?.full_name}</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : (
+          <>
+            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-500 mb-4 flex flex-col gap-1">
+              <div>ولي الأمر: {subscription.profiles?.full_name}</div>
+              <div>السعر الشهري: {subscription.price} جنيه</div>
+              <div>تاريخ التجديد القادم: {subscription.renewal_date}</div>
+            </div>
+
+            <div className="flex gap-2 mb-5">
+              <input
+                type="number"
+                dir="ltr"
+                value={paymentAmount}
+                onChange={(e) => setPaymentAmount(e.target.value)}
+                className={inputClass + " text-left"}
+              />
+              <button
+                onClick={handleRecordPayment}
+                disabled={recordingPayment}
+                className="rounded-xl px-4 text-white text-sm font-bold shrink-0 flex items-center gap-2 disabled:opacity-70"
+                style={{ backgroundColor: COLORS.orange }}
+              >
+                {recordingPayment && <Loader2 size={14} className="animate-spin" />}
+                تسجيل دفعة
+              </button>
+            </div>
+
+            <div className="text-xs font-bold text-gray-400 mb-2">سجل الفواتير</div>
+            {invoices.length === 0 ? (
+              <div className="text-center text-xs text-gray-400 py-6">لسه مفيش فواتير مسجّلة</div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {invoices.map((inv) => (
+                  <div key={inv.id} className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 text-xs">
+                    <div>
+                      <div className="font-semibold text-gray-700">{inv.invoice_number}</div>
+                      <div className="text-gray-400">{new Date(inv.issued_at).toLocaleDateString("ar-EG")}</div>
+                    </div>
+                    <div className="text-left">
+                      <div className="font-bold text-gray-700" dir="ltr">{inv.amount} جنيه</div>
+                      <div style={{ color: inv.status === "paid" ? COLORS.mint : COLORS.orange }}>
+                        {inv.status === "paid" ? "مدفوعة" : "معلّقة"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionsPage({ avatar }) {
+  const [subscriptions, setSubscriptions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+
+  const loadSubscriptions = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("subscriptions")
+        .select("id, price, status, renewal_date, students(full_name), profiles(full_name)")
+        .order("renewal_date", { ascending: true });
+      if (fetchError) throw fetchError;
+      setSubscriptions(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSubscriptions();
+  }, [loadSubscriptions]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الاشتراكات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{subscriptions.length} اشتراك مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + تسجيل اشتراك
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : subscriptions.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش اشتراكات مسجّلة لسه</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {subscriptions.map((s) => {
+              const statusInfo = SUBSCRIPTION_STATUS_LABELS[s.status] || { label: s.status, color: "#9CA3AF" };
+              return (
+                <div key={s.id} onClick={() => setSelectedId(s.id)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer">
+                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                    <Receipt size={16} color="#B7791F" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">{s.students?.full_name}</div>
+                    <div className="text-xs text-gray-400">
+                      {s.profiles?.full_name} · {s.price} جنيه/شهرياً · التجديد {s.renewal_date}
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full" style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}>
+                    {statusInfo.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AddSubscriptionModal onClose={() => setShowAddModal(false)} onCreated={() => { setShowAddModal(false); loadSubscriptions(); }} />
+      )}
+
+      {selectedId && (
+        <SubscriptionDetailModal subscriptionId={selectedId} onClose={() => setSelectedId(null)} onSaved={loadSubscriptions} />
+      )}
+    </div>
+  );
+}
+
 /* ================= قسم الدردشة (صندوق الدعم الفني) ================= */
 
 function ChatThread({ conversationId, profile, onClaimed }) {
@@ -2299,6 +2649,214 @@ function ChatThread({ conversationId, profile, onClaimed }) {
           {sending ? <Loader2 size={16} className="animate-spin" /> : "إرسال"}
         </button>
       </form>
+    </div>
+  );
+}
+
+/* ================= قسم التقييمات ================= */
+
+function RatingsPage({ avatar }) {
+  const [ratings, setRatings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("ratings")
+          .select("id, stars, comment, created_at, buses(bus_code, profiles(full_name))")
+          .order("created_at", { ascending: false });
+        if (fetchError) throw fetchError;
+        setRatings(data || []);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  const avgStars = ratings.length ? (ratings.reduce((sum, r) => sum + r.stars, 0) / ratings.length).toFixed(1) : "—";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">التقييمات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{ratings.length} تقييم من أولياء الأمور</p>
+        </div>
+        {avatar}
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-4 mb-6">
+        <KpiCard icon={Star} label="متوسط التقييم العام" value={avgStars} color={COLORS.sun} loading={loading} />
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : ratings.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">لسه مفيش تقييمات من أولياء الأمور</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {ratings.map((r) => (
+              <div key={r.id} className="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50">
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                  <Star size={16} color="#B7791F" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-gray-700">{r.buses?.bus_code}</span>
+                    <span className="text-xs text-gray-400">{r.buses?.profiles?.full_name}</span>
+                  </div>
+                  {r.comment && <div className="text-xs text-gray-500 mt-1">{r.comment}</div>}
+                  <div className="text-[10px] text-gray-400 mt-1">{new Date(r.created_at).toLocaleDateString("ar-EG")}</div>
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Star key={i} size={13} color={i < r.stars ? COLORS.sun : "#E5E7EB"} fill={i < r.stars ? COLORS.sun : "none"} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= قسم التنبيهات (الأرشيف الكامل) ================= */
+
+function AlertsPage({ profile, avatar }) {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState("open");
+  const [resolvingId, setResolvingId] = useState(null);
+
+  const loadAlerts = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      let query = supabase
+        .from("alerts")
+        .select("id, type, message, status, created_at, resolved_at, buses(bus_code)")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (statusFilter !== "all") query = query.eq("status", statusFilter);
+      const { data, error: fetchError } = await query;
+      if (fetchError) throw fetchError;
+      setAlerts(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter]);
+
+  useEffect(() => {
+    loadAlerts();
+  }, [loadAlerts]);
+
+  async function handleResolve(alertId) {
+    setResolvingId(alertId);
+    try {
+      const { error: updateError } = await supabase
+        .from("alerts")
+        .update({ status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() })
+        .eq("id", alertId);
+      if (updateError) throw updateError;
+      loadAlerts();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">التنبيهات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{alerts.length} تنبيه</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm">
+            <option value="open">معلّقة فقط</option>
+            <option value="resolved">تم حلها</option>
+            <option value="all">الكل</option>
+          </select>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : alerts.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 text-sm text-gray-400 py-10 text-center">
+            <CheckCircle2 size={20} color={COLORS.mint} />
+            مفيش تنبيهات في القسم ده
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {alerts.map((a) => {
+              const isUrgent = a.type === "sos";
+              return (
+                <div key={a.id} className={`flex items-center gap-3 p-3 rounded-xl border ${isUrgent && a.status === "open" ? "border-red-100 bg-red-50" : "border-gray-100"}`}>
+                  <AlertTriangle size={16} color={isUrgent && a.status === "open" ? COLORS.danger : COLORS.orange} className="shrink-0" />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">{ALERT_LABELS[a.type] || a.type}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{a.message}</div>
+                    <div className="text-[10px] text-gray-400 mt-1 flex items-center gap-2">
+                      <span>{a.buses?.bus_code || "—"}</span>
+                      <span>{new Date(a.created_at).toLocaleString("ar-EG", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</span>
+                    </div>
+                  </div>
+                  {a.status === "open" ? (
+                    <button
+                      onClick={() => handleResolve(a.id)}
+                      disabled={resolvingId === a.id}
+                      className="text-[11px] font-bold px-3 py-1.5 rounded-full text-white shrink-0 disabled:opacity-50"
+                      style={{ backgroundColor: COLORS.sky }}
+                    >
+                      {resolvingId === a.id ? <Loader2 size={12} className="animate-spin" /> : "تم الحل"}
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-bold px-3 py-1.5 rounded-full shrink-0" style={{ backgroundColor: COLORS.mint + "20", color: COLORS.mint }}>
+                      محلول
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2749,9 +3307,9 @@ function Dashboard({ profile }) {
           <NavItem icon={School} label="المدارس" active={page === "schools"} onClick={() => setPage("schools")} />
           <NavItem icon={MapPin} label="الرحلات" active={page === "trips"} onClick={() => setPage("trips")} />
           <NavItem icon={MessageCircle} label="الدردشة" active={page === "chat"} onClick={() => setPage("chat")} />
-          <NavItem icon={AlertTriangle} label="التنبيهات" comingSoon />
-          <NavItem icon={Receipt} label="الاشتراكات" comingSoon />
-          <NavItem icon={Star} label="التقييمات" comingSoon />
+          <NavItem icon={AlertTriangle} label="التنبيهات" active={page === "alerts"} onClick={() => setPage("alerts")} />
+          <NavItem icon={Receipt} label="الاشتراكات" active={page === "subscriptions"} onClick={() => setPage("subscriptions")} />
+          <NavItem icon={Star} label="التقييمات" active={page === "ratings"} onClick={() => setPage("ratings")} />
         </nav>
 
         <div className="mt-auto flex flex-col gap-1">
@@ -2806,6 +3364,43 @@ function Dashboard({ profile }) {
           />
         ) : page === "students" ? (
           <StudentsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "subscriptions" ? (
+          <SubscriptionsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "ratings" ? (
+          <RatingsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "alerts" ? (
+          <AlertsPage
+            profile={profile}
             avatar={
               <div
                 className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
