@@ -518,7 +518,7 @@ function BusDetailModal({ busId, onClose, onSaved }) {
         const [supervisorsRes, driversRes] = await Promise.all([
           supabase
             .from("employee_current_assignment")
-            .select("employee_id, employee_code, full_name")
+            .select("employee_id, profile_id, employee_code, full_name")
             .eq("employee_type", "supervisor")
             .eq("employment_status", "available")
             .is("assigned_bus_id", null),
@@ -801,7 +801,7 @@ function BusDetailModal({ busId, onClose, onSaved }) {
                     {availableSupervisors.length === 0 ? "مفيش مشرفات احتياطية متاحة دلوقتي" : "اختر مشرفة بديلة..."}
                   </option>
                   {availableSupervisors.map((s) => (
-                    <option key={s.employee_id} value={s.employee_id}>
+                    <option key={s.employee_id} value={s.profile_id}>
                       {s.employee_code} · {s.full_name}
                     </option>
                   ))}
@@ -1875,11 +1875,13 @@ function StudentModal({ onClose, onCreated }) {
     setSearching(true);
     setError("");
     try {
+      // إزالة الرموز اللي ممكن تكسر صيغة الفلترة (فاصلة، نجمة، أقواس)
+      const safeQuery = parentQuery.trim().replace(/[,*()]/g, "");
       const { data, error: searchError } = await supabase
         .from("profiles")
         .select("id, full_name, phone, email")
         .eq("role", "parent")
-        .or(`email.ilike.%${parentQuery}%,phone.ilike.%${parentQuery}%,full_name.ilike.%${parentQuery}%`)
+        .or(`email.ilike.%${safeQuery}%,phone.ilike.%${safeQuery}%,full_name.ilike.%${safeQuery}%`)
         .limit(5);
       if (searchError) throw searchError;
       setParentResults(data || []);
