@@ -1,6 +1,6 @@
 {
-  "name": "Bybus — تطبيق المشرفة",
-  "short_name": "Bybus Supervisor",
+  "name": "Bybus — لوحة تحكم الإدارة",
+  "short_name": "Bybus Admin",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
