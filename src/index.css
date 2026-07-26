@@ -4,4 +4,8 @@
 
 body {
   font-family: "Cairo", sans-serif;
+  overscroll-behavior-y: none;
 }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
