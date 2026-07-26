@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Bus, Users, MapPin, AlertTriangle, MessageCircle, School,
   LogOut, Settings, Home, Star, Receipt, Eye, EyeOff,
@@ -389,6 +389,100 @@ function CopyableField({ label, value, dir = "ltr" }) {
   );
 }
 
+function SupervisorFaceReference({ profileId, referencePath, onUpdated }) {
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPreview() {
+      if (!referencePath) {
+        setPreviewUrl(null);
+        return;
+      }
+      setLoadingPreview(true);
+      try {
+        // البكت خاص (private) — لازم Signed URL مؤقت بدل رابط مباشر
+        const { data, error: signError } = await supabase.storage
+          .from("supervisor-faces")
+          .createSignedUrl(referencePath, 3600);
+        if (signError) throw signError;
+        if (!cancelled) setPreviewUrl(data?.signedUrl || null);
+      } catch {
+        if (!cancelled) setPreviewUrl(null);
+      } finally {
+        if (!cancelled) setLoadingPreview(false);
+      }
+    }
+    loadPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [referencePath]);
+
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !profileId) return;
+    setUploading(true);
+    setError("");
+    try {
+      // اسم ثابت (reference.jpg) عشان نستبدل القديمة بدل ما نراكم صور قديمة
+      const path = `${profileId}/reference.jpg`;
+      const { error: uploadError } = await supabase.storage
+        .from("supervisor-faces")
+        .upload(path, file, { contentType: file.type || "image/jpeg", upsert: true });
+      if (uploadError) throw uploadError;
+
+      const { error: updateError } = await supabase.from("profiles").update({ face_reference_url: path }).eq("id", profileId);
+      if (updateError) throw updateError;
+
+      onUpdated?.(path);
+    } catch (err) {
+      setError(err.message || "حصل خطأ أثناء رفع الصورة المرجعية");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="text-xs font-bold text-gray-400 mb-2">الصورة المرجعية للتحقق بالوجه</div>
+      <div className="flex items-center gap-3">
+        <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center shrink-0">
+          {loadingPreview ? (
+            <Loader2 size={16} className="animate-spin text-gray-300" />
+          ) : previewUrl ? (
+            <img src={previewUrl} alt="الصورة المرجعية" className="w-full h-full object-cover" />
+          ) : (
+            <UserCog size={20} className="text-gray-300" />
+          )}
+        </div>
+        <div className="flex-1">
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelected} />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="rounded-lg px-3 py-2 text-xs font-bold text-white flex items-center gap-1.5 disabled:opacity-70"
+            style={{ backgroundColor: COLORS.sky }}
+          >
+            {uploading && <Loader2 size={12} className="animate-spin" />}
+            {referencePath ? "استبدال الصورة" : "رفع صورة مرجعية"}
+          </button>
+          <div className="text-[10px] text-gray-400 mt-1.5">
+            صورة واضحة للوجه من الأمام وإضاءة كويسة — هتُستخدم للمقارنة اليومية وقت دخول المشرفة.
+          </div>
+        </div>
+      </div>
+      {error && <div className="text-[11px] text-red-500 mt-2">{error}</div>}
+    </div>
+  );
+}
+
 const pinIcon = new L.DivIcon({
   html: '<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 2px rgba(0,0,0,0.3))">📍</div>',
   className: "",
@@ -493,7 +587,7 @@ function BusDetailModal({ busId, onClose, onSaved }) {
         const { data, error: fetchError } = await supabase
           .from("buses")
           .select(
-            "id, bus_code, plate_number, vehicle_model, vehicle_capacity, vehicle_license_number, vehicle_license_expiry, company_name, is_active, supervisor_id, driver_employee_id, profiles(id, full_name, phone, email), driver:employees!driver_employee_id(id, full_name, phone, license_number, license_expiry, employee_code)"
+            "id, bus_code, plate_number, vehicle_model, vehicle_capacity, vehicle_license_number, vehicle_license_expiry, company_name, is_active, supervisor_id, driver_employee_id, profiles(id, full_name, phone, email, face_reference_url), driver:employees!driver_employee_id(id, full_name, phone, license_number, license_expiry, employee_code)"
           )
           .eq("id", busId)
           .single();
@@ -717,6 +811,11 @@ function BusDetailModal({ busId, onClose, onSaved }) {
                   <label className={labelClass}>رقم التليفون</label>
                   <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_phone} onChange={(e) => update("supervisor_phone", e.target.value)} />
                 </div>
+                <SupervisorFaceReference
+                  profileId={bus.supervisor_id}
+                  referencePath={bus.profiles?.face_reference_url}
+                  onUpdated={(path) => setBus((prev) => (prev ? { ...prev, profiles: { ...prev.profiles, face_reference_url: path } } : prev))}
+                />
               </div>
             </div>
 
@@ -1242,7 +1341,7 @@ function EmployeeDetailModal({ employeeId, onClose, onSaved }) {
       const { data, error: fetchError } = await supabase
         .from("employees")
         .select(
-          "id, employee_code, employee_type, job_title, employment_status, full_name, phone, phone_secondary, national_id, license_number, license_expiry, hire_date, contract_end_date, notes, profiles(email)"
+          "id, employee_code, employee_type, job_title, employment_status, full_name, phone, phone_secondary, national_id, license_number, license_expiry, hire_date, contract_end_date, notes, profile_id, profiles(email, face_reference_url)"
         )
         .eq("id", employeeId)
         .single();
@@ -1361,6 +1460,16 @@ function EmployeeDetailModal({ employeeId, onClose, onSaved }) {
           <>
             <form onSubmit={handleSave} className="flex flex-col gap-4">
               {employee.profiles?.email && <CopyableField label="البريد الإلكتروني (حساب الدخول)" value={employee.profiles.email} />}
+
+              {employee.employee_type === "supervisor" && employee.profile_id && (
+                <SupervisorFaceReference
+                  profileId={employee.profile_id}
+                  referencePath={employee.profiles?.face_reference_url}
+                  onUpdated={(path) =>
+                    setEmployee((prev) => (prev ? { ...prev, profiles: { ...prev.profiles, face_reference_url: path } } : prev))
+                  }
+                />
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
