@@ -5,5 +5,5 @@ export default defineConfig({
   plugins: [react()],
   server: { port: 5173 },
   // لازم يطابق اسم المستودع على GitHub بالظبط، عشان الروابط تشتغل صح على GitHub Pages
-  base: "/Bybus-admin/",
+  base: "/Bybus-supervisor/",
 });
