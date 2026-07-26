@@ -2,14 +2,14 @@
 <html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#4FB6E8" />
-    <title>Bybus — تطبيق المشرفة</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bybus — لوحة تحكم الإدارة</title>
     <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
     <link rel="icon" href="%BASE_URL%icon-32.png" />
     <link rel="apple-touch-icon" href="%BASE_URL%icon-180.png" />
+    <meta name="theme-color" content="#4FB6E8" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="Bybus Supervisor" />
+    <meta name="apple-mobile-web-app-title" content="Bybus Admin" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -20,6 +20,7 @@
   <body class="font-cairo">
     <script>
       // عرض أي خطأ برمجي مباشرة على الشاشة بدل صفحة بيضا فاضية
+      // (مهم جداً لأننا بنشتغل من الموبايل من غير أدوات فحص أخطاء المتصفح)
       window.addEventListener("error", function (e) {
         showFatalError(e.message + "\n" + (e.filename || "") + ":" + (e.lineno || ""));
       });
