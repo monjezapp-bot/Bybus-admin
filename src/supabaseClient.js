@@ -9,9 +9,6 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-// persistSession + autoRefreshToken = جلسة آمنة وتلقائية حقيقية:
-// - الجلسة بتتخزن بأمان في المتصفح (نفس الآلية الرسمية المعتمدة من Supabase)
-// - الـ Token بيتجدد لوحده قبل ما ينتهي، فمفيش انقطاع مفاجئ لجلسة الإدارة
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
