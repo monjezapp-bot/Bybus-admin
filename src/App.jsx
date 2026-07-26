@@ -1,26 +1,21 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Bus, Users, MessageCircle, LogOut, Home, Star, Eye, EyeOff,
-  CheckCircle2, RefreshCw, Loader2, AlertCircle, User, Send,
-  ChevronRight, Camera, PhoneCall, Play, Square, MapPin, Siren,
-  Clock, UserX, Navigation, ShieldCheck, ShieldAlert,
+  Bus, Users, MapPin, AlertTriangle, MessageCircle, School,
+  LogOut, Settings, Home, Star, Receipt, Eye, EyeOff,
+  Clock, CheckCircle2, RefreshCw, Loader2, AlertCircle, UserCog
 } from "lucide-react";
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { supabase } from "./supabaseClient";
 
 /*
-  Bybus — تطبيق المشرفة
+  Bybus — لوحة تحكم الإدارة
   =========================
-  الحساب نفسه (بريد + كلمة مرور) بتسجله الإدارة مسبقاً — مفيش شاشة تسجيل حساب
-  جديد هنا خالص. بعد الدخول، بتتطلب خطوة تحقق بالصورة (مش بديل عن كلمة
-  المرور، خطوة إضافية بعد الدخول) — مايمنعش الرحلة لو الصورة معملتش match،
-  بس بيتسجل تنبيه للإدارة تراجعه.
-
-  ⚠️ ملاحظة أمانة مهمة: مقارنة الصورة هنا حالياً بسيطة (Pixel similarity على
-  المتصفح مباشرة، بدون أي مكتبة تانية ومن غير رفع لأي سيرفر خارجي) — مش
-  "تعرف على الوجه" حقيقي بمعايير الدقة العالية. دي بداية مجانية 100% تخدم
-  الفكرة (تنبيه الإدارة لو في اختلاف واضح جداً) لحد ما نستبدلها بمكتبة
-  تعرف على وجوه حقيقية زي face-api.js أو MediaPipe لاحقاً بنفس الفلسفة
-  (بصفر جنيه). مذكور في README كبند Backlog.
+  - الجلسة آمنة وتلقائية 100% عن طريق @supabase/supabase-js
+    (تخزين آمن + تجديد تلقائي للـ Token)، مفيش أي تخزين مؤقت.
+  - كل زر وكل رقم في الصفحة متصل فعلياً بقاعدة البيانات.
+  - الأقسام اللي لسه ما اتبنتش موضّح عليها "قريباً" صراحةً بدل أزرار وهمية.
 */
 
 const COLORS = {
@@ -31,28 +26,25 @@ const COLORS = {
   danger: "#EF4444",
 };
 
-const TS_STATUS_LABELS = {
-  pending: { label: "منتظر", color: "#9CA3AF" },
-  boarded: { label: "صعد", color: COLORS.sky },
-  dropped_off: { label: "نزل", color: COLORS.mint },
-  absent: { label: "غائب", color: COLORS.danger },
-  delayed: { label: "متأخر", color: COLORS.orange },
+const STATUS_LABELS = {
+  scheduled: { label: "مجدولة", color: "#9CA3AF" },
+  active: { label: "نشطة", color: COLORS.mint },
+  completed: { label: "انتهت", color: "#9CA3AF" },
+  delayed: { label: "متأخرة", color: COLORS.orange },
+  cancelled: { label: "ملغاة", color: COLORS.danger },
+};
+
+const ALERT_LABELS = {
+  sos: "استغاثة SOS",
+  face_mismatch: "عدم تطابق صورة المشرفة",
+  trip_delay: "تأخير رحلة",
+  route_deviation: "خروج عن المسار",
+  complaint: "شكوى",
+  other: "تنبيه آخر",
 };
 
 function todayStr() {
   return new Date().toLocaleDateString("en-CA");
-}
-
-// المسافة بين نقطتين بالكيلومتر (Haversine)
-function distanceKm(lat1, lng1, lat2, lng2) {
-  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return Infinity;
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function BybusMark({ size = 40 }) {
@@ -71,36 +63,6 @@ function BybusMark({ size = 40 }) {
   );
 }
 
-function Spinner() {
-  return (
-    <div className="flex items-center justify-center py-10 text-gray-300">
-      <Loader2 size={22} className="animate-spin" />
-    </div>
-  );
-}
-
-function ErrorBanner({ message }) {
-  if (!message) return null;
-  return (
-    <div className="mx-4 flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-3">
-      <AlertCircle size={16} className="shrink-0 mt-0.5" />
-      <span>{message}</span>
-    </div>
-  );
-}
-
-function TopBar({ title, subtitle, right }) {
-  return (
-    <div className="flex items-center justify-between px-4 pt-5 pb-3">
-      <div>
-        <h1 className="text-lg font-bold text-gray-800">{title}</h1>
-        {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
-      </div>
-      {right}
-    </div>
-  );
-}
-
 /* ================= شاشة تسجيل الدخول ================= */
 
 function LoginScreen() {
@@ -114,25 +76,29 @@ function LoginScreen() {
     e.preventDefault();
     setError("");
     if (!email || !password) {
-      setError("من فضلك أدخلي البريد الإلكتروني وكلمة المرور");
+      setError("من فضلك أدخل البريد الإلكتروني وكلمة المرور");
       return;
     }
     setLoading(true);
     try {
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
-      if (authError) throw new Error("البريد الإلكتروني أو كلمة المرور غير صحيحة");
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (authError) throw new Error(`فشل تسجيل الدخول (رسالة السيرفر: ${authError.message})`);
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
-        .select("id, role")
+        .select("id, full_name, role, admin_permission")
         .eq("id", authData.user.id)
         .single();
 
-      if (profileError || !profile || profile.role !== "supervisor") {
+      if (profileError || !profile || profile.role !== "admin") {
         await supabase.auth.signOut();
-        throw new Error("هذا الحساب مش حساب مشرفة — الحساب ده بتسجله الإدارة فقط");
+        throw new Error("هذا الحساب ليس حساب إدارة — لوحة التحكم دي متاحة لحسابات الإدارة فقط");
       }
-      // باقي الشغل هيتم أوتوماتيك عن طريق onAuthStateChange في App
+      // مفيش حاجة تانية مطلوبة هنا — Supabase بتحدّث الجلسة تلقائياً
+      // ومكوّن App هيلتقط التغيير عن طريق onAuthStateChange
     } catch (err) {
       setError(err.message);
       setLoading(false);
@@ -147,7 +113,7 @@ function LoginScreen() {
             <BybusMark size={56} />
           </div>
           <h1 className="text-2xl font-bold text-gray-800">Bybus</h1>
-          <p className="text-gray-400 text-sm mt-1">تطبيق المشرفة</p>
+          <p className="text-gray-400 text-sm mt-1">لوحة تحكم الإدارة</p>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
@@ -164,7 +130,7 @@ function LoginScreen() {
             dir="ltr"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="supervisor@bybus.app"
+            placeholder="admin@bybus.app"
             className="w-full rounded-xl border border-gray-200 px-4 py-2.5 mb-4 text-sm text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
           />
 
@@ -178,7 +144,11 @@ function LoginScreen() {
               placeholder="••••••••"
               className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
             />
-            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+            <button
+              type="button"
+              onClick={() => setShowPw(!showPw)}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            >
               {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
@@ -195,831 +165,2470 @@ function LoginScreen() {
         </form>
 
         <p className="text-center text-xs text-gray-400 mt-6">
-          بيانات الدخول بتوصلك من إدارة Bybus — لو نسيتي كلمة المرور تواصلي معاهم مباشرة
+          هذه اللوحة متاحة فقط لحسابات الإدارة المسجّلة مسبقاً
         </p>
       </div>
     </div>
   );
 }
 
-/* ================= خطوة التحقق بالصورة بعد الدخول ================= */
+/* ================= عناصر مشتركة ================= */
 
-// تحميل صورة (من URL أو من blob) كـ ImageData مصغّرة 24x24 رمادية للمقارنة السريعة
-async function imageToGraySignature(source) {
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  const url = typeof source === "string" ? source : URL.createObjectURL(source);
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-    img.src = url;
+function KpiCard({ icon: Icon, label, value, color, sub, loading }) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5 flex-1 min-w-[160px]">
+      <div className="rounded-xl p-2.5 w-fit mb-3" style={{ backgroundColor: color + "20" }}>
+        <Icon size={20} color={color} />
+      </div>
+      <div className="text-2xl font-bold text-gray-800 h-8 flex items-center">
+        {loading ? <Loader2 size={18} className="animate-spin text-gray-300" /> : value}
+      </div>
+      <div className="text-xs text-gray-400 mt-1">{label}</div>
+      {sub && !loading && (
+        <div className="text-[11px] mt-1.5 font-medium" style={{ color }}>
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavItem({ icon: Icon, label, active, comingSoon, onClick }) {
+  return (
+    <button
+      disabled={comingSoon}
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+        active ? "text-white" : comingSoon ? "text-gray-300 cursor-not-allowed" : "text-gray-500 hover:bg-gray-50"
+      }`}
+      style={active ? { backgroundColor: COLORS.sky } : {}}
+    >
+      <Icon size={18} />
+      <span className="flex-1 text-right">{label}</span>
+      {comingSoon && (
+        <span className="text-[10px] font-bold rounded-full px-2 py-0.5 bg-gray-100 text-gray-400">قريباً</span>
+      )}
+    </button>
+  );
+}
+
+/* ================= قسم الباصات ================= */
+
+function AddBusModal({ onClose, onCreated }) {
+  const [form, setForm] = useState({
+    supervisor_email: "",
+    supervisor_password: "",
+    supervisor_full_name: "",
+    supervisor_phone: "",
+    plate_number: "",
+    vehicle_model: "",
+    vehicle_capacity: "",
+    driver_name: "",
+    driver_phone: "",
+    company_name: "",
   });
-  const size = 24;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, 0, 0, size, size);
-  const { data } = ctx.getImageData(0, 0, size, size);
-  const gray = new Array(size * size);
-  for (let i = 0; i < gray.length; i++) {
-    const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
-    gray[i] = (r + g + b) / 3;
-  }
-  if (typeof source !== "string") URL.revokeObjectURL(url);
-  return gray;
-}
-
-function similarityScore(sigA, sigB) {
-  if (!sigA || !sigB || sigA.length !== sigB.length) return 0;
-  let diffSum = 0;
-  for (let i = 0; i < sigA.length; i++) diffSum += Math.abs(sigA[i] - sigB[i]);
-  const avgDiff = diffSum / sigA.length; // 0..255
-  return Math.max(0, 1 - avgDiff / 255); // 0..1 (1 = مطابقة تامة)
-}
-
-function FaceCheckScreen({ profile, bus, onDone }) {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const [phase, setPhase] = useState("starting"); // starting | ready | captured | uploading | done | error
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [capturedBlob, setCapturedBlob] = useState(null);
-  const [capturedUrl, setCapturedUrl] = useState(null);
-  const [resultNote, setResultNote] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        setPhase("ready");
-      } catch (err) {
-        setError("تعذر الوصول للكاميرا (" + err.message + "). تقدري تكملي من غير الخطوة دي، وهيتسجل تنبيه للإدارة.");
-        setPhase("error");
-      }
-    }
-    startCamera();
-    return () => {
-      cancelled = true;
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  function capture() {
-    const video = videoRef.current;
-    if (!video) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 480;
-    canvas.height = video.videoHeight || 480;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    canvas.toBlob(
-      (blob) => {
-        setCapturedBlob(blob);
-        setCapturedUrl(URL.createObjectURL(blob));
-        setPhase("captured");
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-      },
-      "image/jpeg",
-      0.85
-    );
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  async function retake() {
-    setCapturedBlob(null);
-    setCapturedUrl(null);
-    setPhase("starting");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setPhase("ready");
-    } catch (err) {
-      setError("تعذر الوصول للكاميرا مرة تانية.");
-      setPhase("error");
-    }
-  }
+  const requiredOk =
+    form.supervisor_email && form.supervisor_password && form.supervisor_full_name && form.plate_number && form.driver_name;
 
-  async function raiseAlert(message) {
-    try {
-      await supabase.from("alerts").insert({
-        type: "face_mismatch",
-        raised_by: profile.id,
-        bus_id: bus?.id || null,
-        message,
-      });
-    } catch {
-      // فشل تسجيل التنبيه مش لازم يوقف دخول المشرفة أبداً
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!requiredOk) {
+      setError("لازم تملأ كل الحقول الأساسية: بريد وكلمة مرور واسم المشرفة، رقم اللوحة، واسم السائق");
+      return;
     }
-  }
-
-  async function confirmAndUpload() {
-    setPhase("uploading");
     setError("");
+    setSaving(true);
     try {
-      const path = `${profile.id}/${Date.now()}.jpg`;
-      const { error: uploadError } = await supabase.storage.from("supervisor-faces").upload(path, capturedBlob, {
-        contentType: "image/jpeg",
+      const { data, error: fnError } = await supabase.functions.invoke("create_supervisor_account", {
+        body: {
+          ...form,
+          vehicle_capacity: form.vehicle_capacity ? Number(form.vehicle_capacity) : null,
+        },
       });
-      if (uploadError) throw uploadError;
-
-      if (!profile.face_reference_url) {
-        setResultNote("تم رفع الصورة بنجاح. لسه معندكيش صورة مرجعية معتمدة من الإدارة، فتم تسجيل هذه المحاولة لمراجعتها.");
-        await raiseAlert("أول صورة تحقق للمشرفة — لا توجد صورة مرجعية معتمدة بعد، بانتظار اعتماد الإدارة. مسار الصورة: " + path);
-      } else {
-        const { data: signedRef, error: signError } = await supabase.storage
-          .from("supervisor-faces")
-          .createSignedUrl(profile.face_reference_url, 300);
-        if (signError || !signedRef?.signedUrl) {
-          setResultNote("تم رفع الصورة، بس تعذر تحميل الصورة المرجعية للمقارنة. تم تنبيه الإدارة.");
-          await raiseAlert("تعذر تحميل الصورة المرجعية للمقارنة (مشكلة وصول للملف). مسار الصورة الجديدة: " + path);
-          setPhase("done");
-          return;
-        }
-        const [refSig, newSig] = await Promise.all([
-          imageToGraySignature(signedRef.signedUrl).catch(() => null),
-          imageToGraySignature(capturedBlob),
-        ]);
-        const score = similarityScore(refSig, newSig);
-        if (score < 0.55) {
-          setResultNote("الصورة لسه اتسجلت، بس فيه اختلاف واضح عن الصورة المرجعية. الرحلة مش هتتمنع، وتم تنبيه الإدارة للمراجعة.");
-          await raiseAlert(`عدم تطابق صورة الدخول اليومية (نسبة تشابه تقريبية: ${(score * 100).toFixed(0)}%). مسار الصورة: ${path}`);
-        } else {
-          setResultNote("تم التحقق من الصورة بنجاح ✓");
-        }
-      }
-      setPhase("done");
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+      onCreated();
     } catch (err) {
-      setError(err.message || "حصل خطأ أثناء رفع صورة التحقق");
-      setPhase("error");
+      setError(err.message || "حصل خطأ غير متوقع أثناء إنشاء الباص");
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function skipStep() {
-    await raiseAlert("تخطّت المشرفة خطوة التحقق بالصورة بعد الدخول (تعذر الوصول للكاميرا أو مشكلة تقنية).");
-    onDone();
-  }
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50 px-4 py-8" dir="rtl">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-        <div className="flex flex-col items-center mb-4">
-          <div className="rounded-2xl p-3 mb-2" style={{ backgroundColor: "#EAF6FC" }}>
-            <ShieldCheck size={28} color={COLORS.sky} />
-          </div>
-          <h2 className="text-base font-bold text-gray-800">خطوة تحقق سريعة</h2>
-          <p className="text-xs text-gray-400 mt-1 text-center">
-            لقطة سريعة لوجهك للتأكد إنك اللي داخلة فعلاً. الخطوة دي متمنعش دخولك أبداً حتى لو حصل خطأ.
-          </p>
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">إضافة باص جديد (حساب المشرفة + السائق + المركبة)</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
         </div>
 
-        {error && phase !== "done" && <ErrorBanner message={error} />}
-
-        <div className="rounded-2xl overflow-hidden bg-gray-100 mb-4" style={{ aspectRatio: "1/1" }}>
-          {phase === "captured" || phase === "uploading" || phase === "done" ? (
-            capturedUrl && <img src={capturedUrl} alt="لقطة التحقق" className="w-full h-full object-cover" />
-          ) : phase === "error" ? (
-            <div className="w-full h-full flex items-center justify-center text-gray-300">
-              <ShieldAlert size={40} />
-            </div>
-          ) : (
-            <video ref={videoRef} muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
-          )}
-        </div>
-
-        {phase === "done" && (
-          <div className="flex items-start gap-2 bg-green-50 border border-green-100 text-green-700 text-xs rounded-xl p-3 mb-4">
-            <CheckCircle2 size={16} className="shrink-0 mt-0.5" />
-            <span>{resultNote}</span>
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
           </div>
         )}
 
-        <div className="flex flex-col gap-2">
-          {phase === "ready" && (
-            <button
-              onClick={capture}
-              className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2"
-              style={{ backgroundColor: COLORS.sky }}
-            >
-              <Camera size={16} /> التقاط الصورة
-            </button>
-          )}
-
-          {phase === "captured" && (
-            <>
-              <button
-                onClick={confirmAndUpload}
-                className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2"
-                style={{ backgroundColor: COLORS.orange }}
-              >
-                <CheckCircle2 size={16} /> تأكيد الصورة والمتابعة
-              </button>
-              <button onClick={retake} className="w-full rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-500">
-                إعادة الالتقاط
-              </button>
-            </>
-          )}
-
-          {phase === "uploading" && (
-            <div className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 opacity-80" style={{ backgroundColor: COLORS.orange }}>
-              <Loader2 size={16} className="animate-spin" /> جارٍ الرفع والتحقق...
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div>
+            <div className="text-xs font-bold text-gray-400 mb-2">بيانات المشرفة (حساب الدخول)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className={labelClass}>اسم المشرفة</label>
+                <input className={inputClass} value={form.supervisor_full_name} onChange={(e) => update("supervisor_full_name", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>البريد الإلكتروني</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_email} onChange={(e) => update("supervisor_email", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>كلمة مرور مؤقتة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_password} onChange={(e) => update("supervisor_password", e.target.value)} />
+              </div>
+              <div className="col-span-2">
+                <label className={labelClass}>رقم تليفون المشرفة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_phone} onChange={(e) => update("supervisor_phone", e.target.value)} />
+              </div>
             </div>
-          )}
+          </div>
 
-          {phase === "done" && (
-            <button
-              onClick={onDone}
-              className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2"
-              style={{ backgroundColor: COLORS.mint }}
-            >
-              الدخول للتطبيق
-            </button>
-          )}
+          <div>
+            <div className="text-xs font-bold text-gray-400 mb-2">بيانات المركبة</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>رقم اللوحة</label>
+                <input className={inputClass} value={form.plate_number} onChange={(e) => update("plate_number", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>الموديل</label>
+                <input className={inputClass} value={form.vehicle_model} onChange={(e) => update("vehicle_model", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>السعة (عدد الطلاب)</label>
+                <input type="number" dir="ltr" className={inputClass + " text-left"} value={form.vehicle_capacity} onChange={(e) => update("vehicle_capacity", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>اسم شركة الباص</label>
+                <input className={inputClass} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
+              </div>
+            </div>
+          </div>
 
-          {(phase === "error" || phase === "starting") && phase !== "uploading" && (
-            <button onClick={skipStep} className="w-full rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-500">
-              تخطي الخطوة دلوقتي
-            </button>
-          )}
-        </div>
+          <div>
+            <div className="text-xs font-bold text-gray-400 mb-2">بيانات السائق (بيانات فقط، بدون دخول للتطبيق)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>اسم السائق</label>
+                <input className={inputClass} value={form.driver_name} onChange={(e) => update("driver_name", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>رقم تليفون السائق</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.driver_phone} onChange={(e) => update("driver_phone", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ الإنشاء..." : "إنشاء الباص"}
+          </button>
+        </form>
       </div>
     </div>
   );
 }
 
-/* ================= الرحلة الحالية (الصفحة الرئيسية) ================= */
+function CopyableField({ label, value, dir = "ltr" }) {
+  const [copied, setCopied] = useState(false);
 
-function SosButton({ profile, bus, tripId }) {
-  const [open, setOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [note, setNote] = useState("");
-  const [sent, setSent] = useState(false);
-
-  async function sendSos() {
-    setSending(true);
+  async function handleCopy() {
+    if (!value) return;
     try {
-      await supabase.from("alerts").insert({
-        type: "sos",
-        raised_by: profile.id,
-        bus_id: bus?.id || null,
-        trip_id: tripId || null,
-        message: note.trim() || "استغاثة فورية من المشرفة",
-      });
-      setSent(true);
-    } catch (err) {
-      // حتى لو فشل التسجيل، السيناريو الحقيقي بيعتمد على رقم الطوارئ الهاتفي كبديل
-    } finally {
-      setSending(false);
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // بعض المتصفحات بتمنع النسخ من غير تفاعل مباشر؛ الفشل هنا غير حرج
     }
   }
 
   return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-20 left-4 z-30 w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg"
-        style={{ backgroundColor: COLORS.danger }}
-        title="استغاثة SOS"
-      >
-        <Siren size={24} />
-      </button>
-
-      {open && (
-        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 p-4" dir="rtl">
-          <div className="bg-white rounded-2xl w-full max-w-sm p-6">
-            {!sent ? (
-              <>
-                <div className="flex items-center gap-2 mb-3">
-                  <Siren size={20} color={COLORS.danger} />
-                  <h3 className="font-bold text-gray-800 text-base">إرسال استغاثة للإدارة</h3>
-                </div>
-                <p className="text-xs text-gray-400 mb-3">هيوصل تنبيه فوري لكل الإدارة. استخدميها في أي حالة طارئة حقيقية بس.</p>
-                <textarea
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="وصف مختصر للحالة (اختياري)"
-                  rows={3}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-200"
-                />
-                <div className="flex gap-2">
-                  <button onClick={() => setOpen(false)} className="flex-1 rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-500">
-                    إلغاء
-                  </button>
-                  <button
-                    onClick={sendSos}
-                    disabled={sending}
-                    className="flex-1 rounded-xl py-2.5 text-white text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-70"
-                    style={{ backgroundColor: COLORS.danger }}
-                  >
-                    {sending && <Loader2 size={14} className="animate-spin" />}
-                    إرسال الآن
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2 mb-3 text-green-600">
-                  <CheckCircle2 size={20} />
-                  <h3 className="font-bold text-base">تم إرسال الاستغاثة للإدارة</h3>
-                </div>
-                <button
-                  onClick={() => {
-                    setOpen(false);
-                    setSent(false);
-                    setNote("");
-                  }}
-                  className="w-full rounded-xl py-2.5 text-white text-sm font-bold"
-                  style={{ backgroundColor: COLORS.sky }}
-                >
-                  تمام
-                </button>
-              </>
-            )}
-          </div>
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>
+      <div className="flex items-center gap-2">
+        <div dir={dir} className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-gray-700 truncate">
+          {value || "—"}
         </div>
-      )}
-    </>
-  );
-}
-
-function StudentStopCard({ ts, distKm, onMark, onPhoto, uploadingPhoto }) {
-  const student = ts.students;
-  const statusInfo = TS_STATUS_LABELS[ts.status] || { label: ts.status, color: "#9CA3AF" };
-
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-3.5">
-      <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0" style={{ backgroundColor: COLORS.sun }}>
-          {student?.full_name?.trim().slice(0, 2) || "؟"}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-bold text-gray-800 truncate">{student?.full_name}{student?.grade ? ` · ${student.grade}` : ""}</div>
-          <div className="text-xs text-gray-400 truncate">
-            {student?.home_address_text || "بدون عنوان نصي"}
-            {Number.isFinite(distKm) && distKm !== Infinity ? ` · على بعد ${distKm.toFixed(1)} كم` : ""}
-          </div>
-        </div>
-        <span className="text-[11px] font-bold px-2.5 py-1 rounded-full shrink-0" style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}>
-          {statusInfo.label}
-        </span>
-      </div>
-
-      <div className="flex gap-1.5 mt-3 flex-wrap">
-        {ts.status === "pending" && (
-          <button onClick={() => onMark(ts, "boarded")} className="flex-1 min-w-[80px] rounded-lg py-2 text-[11px] font-bold text-white" style={{ backgroundColor: COLORS.sky }}>
-            صعد الباص
-          </button>
-        )}
-        {ts.status === "boarded" && (
-          <button onClick={() => onMark(ts, "dropped_off")} className="flex-1 min-w-[80px] rounded-lg py-2 text-[11px] font-bold text-white" style={{ backgroundColor: COLORS.mint }}>
-            نزل
-          </button>
-        )}
-        {(ts.status === "pending" || ts.status === "boarded") && (
-          <>
-            <button onClick={() => onMark(ts, "absent")} className="rounded-lg py-2 px-2.5 text-[11px] font-bold border border-gray-200 text-gray-500 flex items-center gap-1">
-              <UserX size={12} /> غياب
-            </button>
-            {ts.status === "pending" && (
-              <button onClick={() => onMark(ts, "delayed")} className="rounded-lg py-2 px-2.5 text-[11px] font-bold border border-gray-200 text-gray-500 flex items-center gap-1">
-                <Clock size={12} /> تأخير
-              </button>
-            )}
-          </>
-        )}
         <button
-          onClick={() => onPhoto(ts)}
-          disabled={uploadingPhoto === ts.id}
-          className="rounded-lg py-2 px-2.5 text-[11px] font-bold border border-gray-200 text-gray-500 flex items-center gap-1 disabled:opacity-50"
+          type="button"
+          onClick={handleCopy}
+          disabled={!value}
+          className="rounded-xl border border-gray-200 px-3 py-2.5 text-xs font-bold text-gray-500 hover:bg-gray-50 disabled:opacity-40 shrink-0"
         >
-          {uploadingPhoto === ts.id ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />}
+          {copied ? "اتنسخت ✓" : "نسخ"}
         </button>
       </div>
     </div>
   );
 }
 
-function HomePage({ profile }) {
-  const [bus, setBus] = useState(null);
-  const [trips, setTrips] = useState([]);
-  const [currentTrip, setCurrentTrip] = useState(null);
-  const [tripStudents, setTripStudents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+function SupervisorFaceReference({ profileId, referencePath, onUpdated }) {
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
-  const [gpsLoc, setGpsLoc] = useState(null);
-  const [startingTrip, setStartingTrip] = useState(false);
-  const [endingTrip, setEndingTrip] = useState(false);
-  const [uploadingPhotoFor, setUploadingPhotoFor] = useState(null);
   const fileInputRef = useRef(null);
-  const pendingPhotoTs = useRef(null);
 
-  const loadData = useCallback(async (isRefresh = false) => {
-    isRefresh ? setRefreshing(true) : setLoading(true);
-    setError("");
-    try {
-      const { data: busData, error: busError } = await supabase
-        .from("buses")
-        .select("id, bus_code, plate_number, vehicle_model, company_name, is_active")
-        .eq("supervisor_id", profile.id)
-        .maybeSingle();
-      if (busError) throw busError;
-      setBus(busData);
-      if (!busData) {
-        setTrips([]);
-        setCurrentTrip(null);
-        setTripStudents([]);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPreview() {
+      if (!referencePath) {
+        setPreviewUrl(null);
         return;
       }
+      setLoadingPreview(true);
+      try {
+        // البكت خاص (private) — لازم Signed URL مؤقت بدل رابط مباشر
+        const { data, error: signError } = await supabase.storage
+          .from("supervisor-faces")
+          .createSignedUrl(referencePath, 3600);
+        if (signError) throw signError;
+        if (!cancelled) setPreviewUrl(data?.signedUrl || null);
+      } catch {
+        if (!cancelled) setPreviewUrl(null);
+      } finally {
+        if (!cancelled) setLoadingPreview(false);
+      }
+    }
+    loadPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [referencePath]);
 
-      const today = todayStr();
-      const { data: tripsData, error: tripsError } = await supabase
-        .from("trips")
-        .select("id, trip_type, status, scheduled_time, started_at, ended_at, current_lat, current_lng")
-        .eq("bus_id", busData.id)
-        .eq("trip_date", today)
-        .order("scheduled_time", { ascending: true });
-      if (tripsError) throw tripsError;
-      setTrips(tripsData || []);
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !profileId) return;
+    setUploading(true);
+    setError("");
+    try {
+      // اسم ثابت (reference.jpg) عشان نستبدل القديمة بدل ما نراكم صور قديمة
+      const path = `${profileId}/reference.jpg`;
+      const { error: uploadError } = await supabase.storage
+        .from("supervisor-faces")
+        .upload(path, file, { contentType: file.type || "image/jpeg", upsert: true });
+      if (uploadError) throw uploadError;
 
-      const active = (tripsData || []).find((t) => t.status === "active");
-      const next = (tripsData || [])
-        .filter((t) => t.status === "scheduled" || t.status === "delayed")
-        .sort((a, b) => (a.scheduled_time > b.scheduled_time ? 1 : -1))[0];
-      const theTrip = active || next || null;
-      setCurrentTrip(theTrip);
+      const { error: updateError } = await supabase.from("profiles").update({ face_reference_url: path }).eq("id", profileId);
+      if (updateError) throw updateError;
 
-      if (theTrip) {
-        const { data: tsData, error: tsError } = await supabase
-          .from("trip_students")
-          .select("id, status, absence_type, photo_url, checked_at, stop_order, students(id, full_name, grade, home_lat, home_lng, home_address_text)")
-          .eq("trip_id", theTrip.id);
-        if (tsError) throw tsError;
-        setTripStudents(tsData || []);
-      } else {
-        setTripStudents([]);
+      onUpdated?.(path);
+    } catch (err) {
+      setError(err.message || "حصل خطأ أثناء رفع الصورة المرجعية");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="text-xs font-bold text-gray-400 mb-2">الصورة المرجعية للتحقق بالوجه</div>
+      <div className="flex items-center gap-3">
+        <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center shrink-0">
+          {loadingPreview ? (
+            <Loader2 size={16} className="animate-spin text-gray-300" />
+          ) : previewUrl ? (
+            <img src={previewUrl} alt="الصورة المرجعية" className="w-full h-full object-cover" />
+          ) : (
+            <UserCog size={20} className="text-gray-300" />
+          )}
+        </div>
+        <div className="flex-1">
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelected} />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="rounded-lg px-3 py-2 text-xs font-bold text-white flex items-center gap-1.5 disabled:opacity-70"
+            style={{ backgroundColor: COLORS.sky }}
+          >
+            {uploading && <Loader2 size={12} className="animate-spin" />}
+            {referencePath ? "استبدال الصورة" : "رفع صورة مرجعية"}
+          </button>
+          <div className="text-[10px] text-gray-400 mt-1.5">
+            صورة واضحة للوجه من الأمام وإضاءة كويسة — هتُستخدم للمقارنة اليومية وقت دخول المشرفة.
+          </div>
+        </div>
+      </div>
+      {error && <div className="text-[11px] text-red-500 mt-2">{error}</div>}
+    </div>
+  );
+}
+
+const pinIcon = new L.DivIcon({
+  html: '<div style="font-size:30px;line-height:30px;filter:drop-shadow(0 2px 2px rgba(0,0,0,0.3))">📍</div>',
+  className: "",
+  iconSize: [30, 30],
+  iconAnchor: [15, 30],
+});
+
+function MapClickHandler({ onPick }) {
+  useMapEvents({
+    click(e) {
+      onPick(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+function MapRecenter({ lat, lng }) {
+  const map = useMap();
+  useEffect(() => {
+    if (lat != null && lng != null) {
+      map.setView([lat, lng], Math.max(map.getZoom(), 15));
+    }
+  }, [lat, lng]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+function LocationPicker({ lat, lng, onChange }) {
+  const [linkInput, setLinkInput] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const cairoCenter = [30.0444, 31.2357]; // نقطة بداية افتراضية (القاهرة) لحد ما يتحدد موقع فعلي
+
+  function handleLinkSubmit() {
+    setLinkError("");
+    if (!linkInput.trim()) return;
+    const patterns = [/@(-?\d+\.\d+),(-?\d+\.\d+)/, /[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/, /[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/];
+    for (const p of patterns) {
+      const m = linkInput.match(p);
+      if (m) {
+        onChange(parseFloat(m[1]), parseFloat(m[2]));
+        setLinkInput("");
+        return;
+      }
+    }
+    setLinkError("مقدرتش أفهم اللينك ده. جرب تدوس على المكان في الخريطة مباشرة بدل كده");
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1.5">الموقع على الخريطة</label>
+      <div className="flex gap-2 mb-2">
+        <input
+          dir="ltr"
+          placeholder="أو الصق رابط Google Maps هنا"
+          value={linkInput}
+          onChange={(e) => setLinkInput(e.target.value)}
+          className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-xs text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
+        />
+        <button
+          type="button"
+          onClick={handleLinkSubmit}
+          className="rounded-xl px-3 text-xs font-bold text-white shrink-0"
+          style={{ backgroundColor: COLORS.sky }}
+        >
+          تحديد
+        </button>
+      </div>
+      {linkError && <div className="text-[11px] text-red-500 mb-2">{linkError}</div>}
+
+      <div className="rounded-xl overflow-hidden border border-gray-200" style={{ height: 220 }}>
+        <MapContainer center={lat != null && lng != null ? [lat, lng] : cairoCenter} zoom={lat != null && lng != null ? 15 : 6} style={{ height: "100%", width: "100%" }}>
+          <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <MapClickHandler onPick={onChange} />
+          {lat != null && lng != null && <Marker position={[lat, lng]} icon={pinIcon} />}
+          <MapRecenter lat={lat} lng={lng} />
+        </MapContainer>
+      </div>
+
+      <div className="text-[11px] text-gray-400 mt-1.5">
+        {lat != null && lng != null ? `الموقع المحدد: ${lat.toFixed(5)}, ${lng.toFixed(5)}` : "دوس على المكان بالظبط في الخريطة لتحديد الموقع"}
+      </div>
+    </div>
+  );
+}
+
+function BusDetailModal({ busId, onClose, onSaved }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [bus, setBus] = useState(null);
+  const [form, setForm] = useState(null);
+  const [availableSupervisors, setAvailableSupervisors] = useState([]);
+  const [availableDrivers, setAvailableDrivers] = useState([]);
+  const [reassigning, setReassigning] = useState(false);
+  const [schedule, setSchedule] = useState({}); // { [dayIndex]: { morning: "07:00", evening: "14:00" } }
+  const [savingSchedule, setSavingSchedule] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("buses")
+          .select(
+            "id, bus_code, plate_number, vehicle_model, vehicle_capacity, vehicle_license_number, vehicle_license_expiry, company_name, is_active, supervisor_id, driver_employee_id, profiles(id, full_name, phone, email, face_reference_url), driver:employees!driver_employee_id(id, full_name, phone, license_number, license_expiry, employee_code)"
+          )
+          .eq("id", busId)
+          .single();
+        if (fetchError) throw fetchError;
+        setBus(data);
+        setForm({
+          plate_number: data.plate_number || "",
+          vehicle_model: data.vehicle_model || "",
+          vehicle_capacity: data.vehicle_capacity ?? "",
+          vehicle_license_number: data.vehicle_license_number || "",
+          vehicle_license_expiry: data.vehicle_license_expiry || "",
+          driver_name: data.driver?.full_name || "",
+          driver_phone: data.driver?.phone || "",
+          driver_license_number: data.driver?.license_number || "",
+          driver_license_expiry: data.driver?.license_expiry || "",
+          company_name: data.company_name || "",
+          supervisor_full_name: data.profiles?.full_name || "",
+          supervisor_phone: data.profiles?.phone || "",
+        });
+
+        // موظفين متاحين للاستبدال بالـ ID (مشرفات احتياطية مالهاش باص، سائقين متاحين)
+        const [supervisorsRes, driversRes] = await Promise.all([
+          supabase
+            .from("employee_current_assignment")
+            .select("employee_id, profile_id, employee_code, full_name")
+            .eq("employee_type", "supervisor")
+            .eq("employment_status", "available")
+            .is("assigned_bus_id", null),
+          supabase
+            .from("employee_current_assignment")
+            .select("employee_id, employee_code, full_name")
+            .eq("employee_type", "driver")
+            .eq("employment_status", "available")
+            .is("assigned_bus_id", null),
+        ]);
+        setAvailableSupervisors(supervisorsRes.data || []);
+        setAvailableDrivers(driversRes.data || []);
+
+        const { data: scheduleRows, error: scheduleError } = await supabase
+          .from("bus_shift_schedules")
+          .select("day_of_week, trip_type, scheduled_time")
+          .eq("bus_id", busId);
+        if (scheduleError) throw scheduleError;
+        const scheduleMap = {};
+        (scheduleRows || []).forEach((r) => {
+          scheduleMap[r.day_of_week] = scheduleMap[r.day_of_week] || {};
+          scheduleMap[r.day_of_week][r.trip_type] = r.scheduled_time?.slice(0, 5);
+        });
+        setSchedule(scheduleMap);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [busId]);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { error: busError } = await supabase
+        .from("buses")
+        .update({
+          plate_number: form.plate_number,
+          vehicle_model: form.vehicle_model || null,
+          vehicle_capacity: form.vehicle_capacity ? Number(form.vehicle_capacity) : null,
+          vehicle_license_number: form.vehicle_license_number || null,
+          vehicle_license_expiry: form.vehicle_license_expiry || null,
+          company_name: form.company_name || null,
+        })
+        .eq("id", busId);
+      if (busError) throw busError;
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          full_name: form.supervisor_full_name,
+          phone: form.supervisor_phone || null,
+        })
+        .eq("id", bus.supervisor_id);
+      if (profileError) throw profileError;
+
+      const { error: driverError } = await supabase
+        .from("employees")
+        .update({
+          full_name: form.driver_name,
+          phone: form.driver_phone || null,
+          license_number: form.driver_license_number || null,
+          license_expiry: form.driver_license_expiry || null,
+        })
+        .eq("id", bus.driver_employee_id);
+      if (driverError) throw driverError;
+
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reassignSupervisor(newProfileId) {
+    if (!newProfileId) return;
+    setReassigning(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase.from("buses").update({ supervisor_id: newProfileId }).eq("id", busId);
+      if (updateError) throw updateError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReassigning(false);
+    }
+  }
+
+  async function reassignDriver(newEmployeeId) {
+    if (!newEmployeeId) return;
+    setReassigning(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase.from("buses").update({ driver_employee_id: newEmployeeId }).eq("id", busId);
+      if (updateError) throw updateError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReassigning(false);
+    }
+  }
+
+  function updateScheduleTime(dayIndex, tripType, time) {
+    setSchedule((prev) => ({
+      ...prev,
+      [dayIndex]: { ...prev[dayIndex], [tripType]: time },
+    }));
+  }
+
+  async function handleSaveSchedule() {
+    setSavingSchedule(true);
+    setError("");
+    try {
+      const upserts = [];
+      const deletions = [];
+      for (let day = 0; day <= 6; day++) {
+        for (const tripType of ["morning", "evening"]) {
+          const time = schedule[day]?.[tripType];
+          if (time) {
+            upserts.push({ bus_id: busId, day_of_week: day, trip_type: tripType, scheduled_time: time, is_active: true });
+          } else {
+            deletions.push({ day, tripType });
+          }
+        }
+      }
+
+      if (upserts.length > 0) {
+        const { error: upsertError } = await supabase
+          .from("bus_shift_schedules")
+          .upsert(upserts, { onConflict: "bus_id,trip_type,day_of_week" });
+        if (upsertError) throw upsertError;
+      }
+
+      // حذف أي موعد اتشال من الفورم (كان موجود قبل كده وبقى فاضي)
+      for (const d of deletions) {
+        await supabase
+          .from("bus_shift_schedules")
+          .delete()
+          .eq("bus_id", busId)
+          .eq("day_of_week", d.day)
+          .eq("trip_type", d.tripType);
       }
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setSavingSchedule(false);
     }
-  }, [profile.id]);
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">{loading ? "جارٍ التحميل..." : `تفاصيل ${bus?.bus_code}`}</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : (
+          <>
+          <form onSubmit={handleSave} className="flex flex-col gap-5">
+            <div>
+              <div className="text-xs font-bold text-gray-400 mb-2">بيانات المشرفة</div>
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className={labelClass}>الاسم</label>
+                  <input className={inputClass} value={form.supervisor_full_name} onChange={(e) => update("supervisor_full_name", e.target.value)} />
+                </div>
+                <CopyableField label="البريد الإلكتروني (حساب الدخول)" value={bus.profiles?.email} />
+                <div>
+                  <label className={labelClass}>رقم التليفون</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.supervisor_phone} onChange={(e) => update("supervisor_phone", e.target.value)} />
+                </div>
+                <SupervisorFaceReference
+                  profileId={bus.supervisor_id}
+                  referencePath={bus.profiles?.face_reference_url}
+                  onUpdated={(path) => setBus((prev) => (prev ? { ...prev, profiles: { ...prev.profiles, face_reference_url: path } } : prev))}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs font-bold text-gray-400 mb-2">بيانات المركبة</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelClass}>رقم اللوحة</label>
+                  <input className={inputClass} value={form.plate_number} onChange={(e) => update("plate_number", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>الموديل</label>
+                  <input className={inputClass} value={form.vehicle_model} onChange={(e) => update("vehicle_model", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>السعة</label>
+                  <input type="number" dir="ltr" className={inputClass + " text-left"} value={form.vehicle_capacity} onChange={(e) => update("vehicle_capacity", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>شركة الباص</label>
+                  <input className={inputClass} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم رخصة المركبة</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.vehicle_license_number} onChange={(e) => update("vehicle_license_number", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>تاريخ انتهاء رخصة المركبة</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.vehicle_license_expiry} onChange={(e) => update("vehicle_license_expiry", e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs font-bold text-gray-400 mb-2">بيانات السائق</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <CopyableField label="كود الموظف (السائق)" value={bus.driver?.employee_code} dir="ltr" />
+                </div>
+                <div>
+                  <label className={labelClass}>الاسم</label>
+                  <input className={inputClass} value={form.driver_name} onChange={(e) => update("driver_name", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم التليفون</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.driver_phone} onChange={(e) => update("driver_phone", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم رخصة القيادة</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.driver_license_number} onChange={(e) => update("driver_license_number", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>تاريخ انتهاء رخصة القيادة</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.driver_license_expiry} onChange={(e) => update("driver_license_expiry", e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+              style={{ backgroundColor: COLORS.orange }}
+            >
+              {saving && <Loader2 size={16} className="animate-spin" />}
+              {saving ? "جارٍ الحفظ..." : "حفظ التعديلات"}
+            </button>
+          </form>
+
+            <div className="border-t border-gray-100 mt-5 pt-5 flex flex-col gap-4">
+              <div className="text-xs font-bold text-gray-400">استبدال بموظف موجود بالفعل (بالـ ID)</div>
+
+              <div>
+                <label className={labelClass}>استبدال المشرفة (من المشرفات الاحتياطية المتاحة)</label>
+                <select
+                  disabled={reassigning}
+                  defaultValue=""
+                  onChange={(e) => e.target.value && reassignSupervisor(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="" disabled>
+                    {availableSupervisors.length === 0 ? "مفيش مشرفات احتياطية متاحة دلوقتي" : "اختر مشرفة بديلة..."}
+                  </option>
+                  {availableSupervisors.map((s) => (
+                    <option key={s.employee_id} value={s.profile_id}>
+                      {s.employee_code} · {s.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className={labelClass}>استبدال السائق (من السائقين المتاحين)</label>
+                <select
+                  disabled={reassigning}
+                  defaultValue=""
+                  onChange={(e) => e.target.value && reassignDriver(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="" disabled>
+                    {availableDrivers.length === 0 ? "مفيش سائقين متاحين دلوقتي" : "اختر سائق بديل..."}
+                  </option>
+                  {availableDrivers.map((d) => (
+                    <option key={d.employee_id} value={d.employee_id}>
+                      {d.employee_code} · {d.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {reassigning && (
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <Loader2 size={14} className="animate-spin" /> جارٍ تنفيذ الاستبدال...
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-gray-100 mt-5 pt-5">
+              <div className="text-xs font-bold text-gray-400 mb-3">
+                مواعيد الرحلات الأسبوعية (منها بيتولد جدول اليوم تلقائياً كل يوم)
+              </div>
+              <div className="flex flex-col gap-2">
+                {["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"].map((dayName, dayIndex) => (
+                  <div key={dayIndex} className="grid grid-cols-3 items-center gap-2">
+                    <span className="text-xs text-gray-500">{dayName}</span>
+                    <input
+                      type="time"
+                      dir="ltr"
+                      value={schedule[dayIndex]?.morning || ""}
+                      onChange={(e) => updateScheduleTime(dayIndex, "morning", e.target.value)}
+                      className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-left"
+                      title="ذهاب"
+                    />
+                    <input
+                      type="time"
+                      dir="ltr"
+                      value={schedule[dayIndex]?.evening || ""}
+                      onChange={(e) => updateScheduleTime(dayIndex, "evening", e.target.value)}
+                      className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs text-left"
+                      title="عودة"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-1">
+                <span></span>
+                <span>ذهاب</span>
+                <span>عودة</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveSchedule}
+                disabled={savingSchedule}
+                className="w-full rounded-xl py-2.5 text-sm font-semibold mt-3 flex items-center justify-center gap-2 disabled:opacity-70"
+                style={{ backgroundColor: COLORS.sky, color: "white" }}
+              >
+                {savingSchedule && <Loader2 size={14} className="animate-spin" />}
+                {savingSchedule ? "جارٍ الحفظ..." : "حفظ المواعيد"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BusesPage({ profile, avatar }) {
+  const [buses, setBuses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedBusId, setSelectedBusId] = useState(null);
+  const [togglingId, setTogglingId] = useState(null);
+
+  const loadBuses = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("buses")
+        .select("id, bus_code, plate_number, vehicle_model, company_name, is_active, profiles(full_name), driver:employees!driver_employee_id(full_name)")
+        .order("bus_code", { ascending: true });
+      if (fetchError) throw fetchError;
+      setBuses(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBuses();
+  }, [loadBuses]);
+
+  async function toggleActive(bus) {
+    setTogglingId(bus.id);
+    try {
+      const { error: updateError } = await supabase.from("buses").update({ is_active: !bus.is_active }).eq("id", bus.id);
+      if (updateError) throw updateError;
+      setBuses((prev) => prev.map((b) => (b.id === bus.id ? { ...b, is_active: !b.is_active } : b)));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الباصات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{buses.length} باص مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + إضافة باص جديد
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : buses.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش باصات مسجّلة لسه — دوس "إضافة باص جديد" عشان تبدأ</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {buses.map((b) => (
+              <div
+                key={b.id}
+                onClick={() => setSelectedBusId(b.id)}
+                className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer"
+              >
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
+                  <Bus size={16} color={COLORS.sky} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-gray-700">
+                    {b.bus_code} · {b.plate_number}
+                    {b.vehicle_model ? ` · ${b.vehicle_model}` : ""}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    المشرفة: {b.profiles?.full_name || "—"} · السائق: {b.driver?.full_name || "—"}
+                    {b.company_name ? ` · ${b.company_name}` : ""}
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleActive(b);
+                  }}
+                  disabled={togglingId === b.id}
+                  className="text-[11px] font-bold px-2.5 py-1 rounded-full disabled:opacity-50"
+                  style={{
+                    backgroundColor: b.is_active ? COLORS.mint + "20" : "#9CA3AF20",
+                    color: b.is_active ? COLORS.mint : "#6B7280",
+                  }}
+                >
+                  {togglingId === b.id ? <Loader2 size={12} className="animate-spin" /> : b.is_active ? "نشط" : "متوقف"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AddBusModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={() => {
+            setShowAddModal(false);
+            loadBuses();
+          }}
+        />
+      )}
+
+      {selectedBusId && (
+        <BusDetailModal
+          busId={selectedBusId}
+          onClose={() => setSelectedBusId(null)}
+          onSaved={() => {
+            setSelectedBusId(null);
+            loadBuses();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= قسم الموظفين ================= */
+
+const EMPLOYEE_TYPE_LABELS = {
+  supervisor: "مشرفة",
+  driver: "سائق",
+  admin_staff: "إدارة",
+};
+
+const EMPLOYMENT_STATUS_LABELS = {
+  available: { label: "متاح", color: COLORS.mint },
+  on_leave: { label: "في إجازة", color: COLORS.orange },
+  terminated: { label: "منتهي الخدمة", color: "#9CA3AF" },
+};
+
+function AddEmployeeModal({ onClose, onCreated }) {
+  const [empType, setEmpType] = useState("driver");
+  const [form, setForm] = useState({
+    full_name: "",
+    phone: "",
+    national_id: "",
+    license_number: "",
+    license_expiry: "",
+    email: "",
+    password: "",
+    admin_permission: "support",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+
+    if (!form.full_name) {
+      setError("اسم الموظف مطلوب");
+      return;
+    }
+    if (empType !== "driver" && (!form.email || !form.password)) {
+      setError("البريد الإلكتروني وكلمة المرور مطلوبين لأي حساب بيسجل دخول");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (empType === "driver") {
+        // السائق: بيانات فقط، بدون حساب دخول - إدراج مباشر
+        const { error: insertError } = await supabase.from("employees").insert({
+          employee_type: "driver",
+          job_title: "سائق",
+          full_name: form.full_name,
+          phone: form.phone || null,
+          national_id: form.national_id || null,
+          license_number: form.license_number || null,
+          license_expiry: form.license_expiry || null,
+        });
+        if (insertError) throw insertError;
+      } else if (empType === "supervisor") {
+        // مشرفة احتياطية بدون باص - عن طريق نفس الـ Edge Function، بدون بيانات باص
+        const { data, error: fnError } = await supabase.functions.invoke("create_supervisor_account", {
+          body: {
+            supervisor_email: form.email,
+            supervisor_password: form.password,
+            supervisor_full_name: form.full_name,
+            supervisor_phone: form.phone || null,
+          },
+        });
+        if (fnError) throw fnError;
+        if (data?.error) throw new Error(data.error);
+      } else {
+        // موظف إداري - عن طريق Edge Function مخصصة (متاحة للمدير العام فقط)
+        const { data, error: fnError } = await supabase.functions.invoke("create_admin_account", {
+          body: {
+            email: form.email,
+            password: form.password,
+            full_name: form.full_name,
+            phone: form.phone || null,
+            admin_permission: form.admin_permission,
+          },
+        });
+        if (fnError) throw fnError;
+        if (data?.error) throw new Error(data.error);
+      }
+      onCreated();
+    } catch (err) {
+      setError(err.message || "حصل خطأ غير متوقع");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">إضافة موظف جديد</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        <div className="flex gap-2 mb-5">
+          {[
+            { key: "driver", label: "سائق" },
+            { key: "supervisor", label: "مشرفة احتياطية" },
+            { key: "admin_staff", label: "موظف إدارة" },
+          ].map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setEmpType(t.key)}
+              className="flex-1 rounded-xl py-2 text-xs font-bold border"
+              style={
+                empType === t.key
+                  ? { backgroundColor: COLORS.sky, color: "white", borderColor: COLORS.sky }
+                  : { borderColor: "#E5E7EB", color: "#6B7280" }
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>الاسم الكامل</label>
+            <input className={inputClass} value={form.full_name} onChange={(e) => update("full_name", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>رقم التليفون</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+          </div>
+
+          {empType === "driver" && (
+            <>
+              <div>
+                <label className={labelClass}>الرقم القومي</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.national_id} onChange={(e) => update("national_id", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>رقم رخصة القيادة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.license_number} onChange={(e) => update("license_number", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>تاريخ انتهاء الرخصة</label>
+                <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.license_expiry} onChange={(e) => update("license_expiry", e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {empType !== "driver" && (
+            <>
+              <div>
+                <label className={labelClass}>البريد الإلكتروني (حساب الدخول)</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.email} onChange={(e) => update("email", e.target.value)} />
+              </div>
+              <div>
+                <label className={labelClass}>كلمة مرور مؤقتة</label>
+                <input dir="ltr" className={inputClass + " text-left"} value={form.password} onChange={(e) => update("password", e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {empType === "admin_staff" && (
+            <div>
+              <label className={labelClass}>المسمى الوظيفي</label>
+              <select className={inputClass} value={form.admin_permission} onChange={(e) => update("admin_permission", e.target.value)}>
+                <option value="support">مسؤول دعم فني</option>
+                <option value="operations">مسؤول تشغيل</option>
+                <option value="general_manager">مدير عام</option>
+              </select>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ الإنشاء..." : "إضافة الموظف"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EmployeeDetailModal({ employeeId, onClose, onSaved }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [employee, setEmployee] = useState(null);
+  const [form, setForm] = useState(null);
+  const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({ start_date: "", end_date: "", reason: "" });
+  const [savingLeave, setSavingLeave] = useState(false);
+
+  const loadEmployee = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("employees")
+        .select(
+          "id, employee_code, employee_type, job_title, employment_status, full_name, phone, phone_secondary, national_id, license_number, license_expiry, hire_date, contract_end_date, notes, profile_id, profiles(email, face_reference_url)"
+        )
+        .eq("id", employeeId)
+        .single();
+      if (fetchError) throw fetchError;
+      setEmployee(data);
+      setForm({
+        full_name: data.full_name || "",
+        phone: data.phone || "",
+        phone_secondary: data.phone_secondary || "",
+        national_id: data.national_id || "",
+        license_number: data.license_number || "",
+        license_expiry: data.license_expiry || "",
+        hire_date: data.hire_date || "",
+        contract_end_date: data.contract_end_date || "",
+        notes: data.notes || "",
+        employment_status: data.employment_status,
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [employeeId]);
+
+  useEffect(() => {
+    loadEmployee();
+  }, [loadEmployee]);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase
+        .from("employees")
+        .update({
+          full_name: form.full_name,
+          phone: form.phone || null,
+          phone_secondary: form.phone_secondary || null,
+          national_id: form.national_id || null,
+          license_number: form.license_number || null,
+          license_expiry: form.license_expiry || null,
+          hire_date: form.hire_date || null,
+          contract_end_date: form.contract_end_date || null,
+          notes: form.notes || null,
+          employment_status: form.employment_status,
+        })
+        .eq("id", employeeId);
+      if (updateError) throw updateError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSubmitLeave(e) {
+    e.preventDefault();
+    if (!leaveForm.start_date || !leaveForm.end_date) {
+      setError("لازم تحدد تاريخ بداية ونهاية الإجازة");
+      return;
+    }
+    setSavingLeave(true);
+    setError("");
+    try {
+      const { error: leaveError } = await supabase.from("leave_requests").insert({
+        employee_id: employeeId,
+        start_date: leaveForm.start_date,
+        end_date: leaveForm.end_date,
+        reason: leaveForm.reason || null,
+        status: "approved", // الإدارة هي اللي بتسجلها مباشرة، فبتُعتمد فوراً وتُفعّل التنبيه التلقائي
+        reviewed_at: new Date().toISOString(),
+      });
+      if (leaveError) throw leaveError;
+      setShowLeaveForm(false);
+      setLeaveForm({ start_date: "", end_date: "", reason: "" });
+      loadEmployee();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingLeave(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">
+            {loading ? "جارٍ التحميل..." : `${employee?.employee_code} · ${employee?.job_title || EMPLOYEE_TYPE_LABELS[employee?.employee_type]}`}
+          </h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : (
+          <>
+            <form onSubmit={handleSave} className="flex flex-col gap-4">
+              {employee.profiles?.email && <CopyableField label="البريد الإلكتروني (حساب الدخول)" value={employee.profiles.email} />}
+
+              {employee.employee_type === "supervisor" && employee.profile_id && (
+                <SupervisorFaceReference
+                  profileId={employee.profile_id}
+                  referencePath={employee.profiles?.face_reference_url}
+                  onUpdated={(path) =>
+                    setEmployee((prev) => (prev ? { ...prev, profiles: { ...prev.profiles, face_reference_url: path } } : prev))
+                  }
+                />
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className={labelClass}>الاسم الكامل</label>
+                  <input className={inputClass} value={form.full_name} onChange={(e) => update("full_name", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم التليفون</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>رقم تليفون بديل</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.phone_secondary} onChange={(e) => update("phone_secondary", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>الرقم القومي</label>
+                  <input dir="ltr" className={inputClass + " text-left"} value={form.national_id} onChange={(e) => update("national_id", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>الحالة</label>
+                  <select className={inputClass} value={form.employment_status} onChange={(e) => update("employment_status", e.target.value)}>
+                    <option value="available">متاح</option>
+                    <option value="on_leave">في إجازة</option>
+                    <option value="terminated">منتهي الخدمة</option>
+                  </select>
+                </div>
+                {employee.employee_type === "driver" && (
+                  <>
+                    <div>
+                      <label className={labelClass}>رقم رخصة القيادة</label>
+                      <input dir="ltr" className={inputClass + " text-left"} value={form.license_number} onChange={(e) => update("license_number", e.target.value)} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>تاريخ انتهاء الرخصة</label>
+                      <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.license_expiry} onChange={(e) => update("license_expiry", e.target.value)} />
+                    </div>
+                  </>
+                )}
+                <div>
+                  <label className={labelClass}>تاريخ التعيين</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.hire_date} onChange={(e) => update("hire_date", e.target.value)} />
+                </div>
+                <div>
+                  <label className={labelClass}>تاريخ انتهاء العقد</label>
+                  <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.contract_end_date} onChange={(e) => update("contract_end_date", e.target.value)} />
+                </div>
+                <div className="col-span-2">
+                  <label className={labelClass}>ملاحظات</label>
+                  <textarea className={inputClass} rows={2} value={form.notes} onChange={(e) => update("notes", e.target.value)} />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+                style={{ backgroundColor: COLORS.orange }}
+              >
+                {saving && <Loader2 size={16} className="animate-spin" />}
+                {saving ? "جارٍ الحفظ..." : "حفظ التعديلات"}
+              </button>
+            </form>
+
+            <div className="border-t border-gray-100 mt-5 pt-5">
+              {!showLeaveForm ? (
+                <button
+                  onClick={() => setShowLeaveForm(true)}
+                  className="w-full rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50"
+                >
+                  + تسجيل إجازة معتمدة
+                </button>
+              ) : (
+                <form onSubmit={handleSubmitLeave} className="flex flex-col gap-3">
+                  <div className="text-xs font-bold text-gray-400">
+                    تسجيل الإجازة هيحدّث حالة الموظف تلقائياً، ولو مرتبط بباص هيتبعت تنبيه للإدارة فوراً
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>من تاريخ</label>
+                      <input type="date" dir="ltr" className={inputClass + " text-left"} value={leaveForm.start_date} onChange={(e) => setLeaveForm((p) => ({ ...p, start_date: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>إلى تاريخ</label>
+                      <input type="date" dir="ltr" className={inputClass + " text-left"} value={leaveForm.end_date} onChange={(e) => setLeaveForm((p) => ({ ...p, end_date: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelClass}>السبب (اختياري)</label>
+                    <input className={inputClass} value={leaveForm.reason} onChange={(e) => setLeaveForm((p) => ({ ...p, reason: e.target.value }))} />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowLeaveForm(false)}
+                      className="flex-1 rounded-xl py-2.5 text-sm font-semibold border border-gray-200 text-gray-500"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingLeave}
+                      className="flex-1 rounded-xl py-2.5 text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-70"
+                      style={{ backgroundColor: COLORS.sky }}
+                    >
+                      {savingLeave && <Loader2 size={14} className="animate-spin" />}
+                      اعتماد الإجازة
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmployeesPage({ avatar }) {
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+
+  const loadEmployees = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("employees")
+        .select("id, employee_code, employee_type, job_title, employment_status, full_name, phone")
+        .order("employee_code", { ascending: true });
+      if (fetchError) throw fetchError;
+      setEmployees(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadEmployees();
+  }, [loadEmployees]);
+
+  const filtered = employees.filter((emp) => {
+    const matchesType = typeFilter === "all" || emp.employee_type === typeFilter;
+    const q = search.trim().toLowerCase();
+    const matchesSearch =
+      !q || emp.full_name.toLowerCase().includes(q) || emp.employee_code?.toLowerCase().includes(q) || (emp.phone || "").includes(q);
+    return matchesType && matchesSearch;
+  });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الموظفين</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{employees.length} موظف مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + إضافة موظف
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input
+          placeholder="بحث بالاسم، الكود، أو رقم التليفون"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 min-w-[220px] rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+        />
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm"
+        >
+          <option value="all">كل الأنواع</option>
+          <option value="supervisor">مشرفات</option>
+          <option value="driver">سائقين</option>
+          <option value="admin_staff">إدارة</option>
+        </select>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش نتائج مطابقة</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {filtered.map((emp) => {
+              const statusInfo = EMPLOYMENT_STATUS_LABELS[emp.employment_status] || { label: emp.employment_status, color: "#9CA3AF" };
+              return (
+                <div
+                  key={emp.id}
+                  onClick={() => setSelectedEmployeeId(emp.id)}
+                  className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer"
+                >
+                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                    <Users size={16} color="#B7791F" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">
+                      {emp.employee_code} · {emp.full_name}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {emp.job_title || EMPLOYEE_TYPE_LABELS[emp.employee_type]}
+                      {emp.phone ? ` · ${emp.phone}` : ""}
+                    </div>
+                  </div>
+                  <span
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                    style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
+                  >
+                    {statusInfo.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AddEmployeeModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={() => {
+            setShowAddModal(false);
+            loadEmployees();
+          }}
+        />
+      )}
+
+      {selectedEmployeeId && (
+        <EmployeeDetailModal
+          employeeId={selectedEmployeeId}
+          onClose={() => setSelectedEmployeeId(null)}
+          onSaved={() => {
+            setSelectedEmployeeId(null);
+            loadEmployees();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= قسم المدارس ================= */
+
+function SchoolModal({ school, onClose, onSaved }) {
+  const isEdit = Boolean(school);
+  const [form, setForm] = useState({
+    name: school?.name || "",
+    address_text: school?.address_text || "",
+    location_lat: school?.location_lat ?? "",
+    location_lng: school?.location_lng ?? "",
+    phone: school?.phone || "",
+    whatsapp_number: school?.whatsapp_number || "",
+    external_apply_url: school?.external_apply_url || "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!form.name || !form.location_lat || !form.location_lng) {
+      setError("اسم المدرسة والإحداثيات (خط الطول والعرض) مطلوبين لحساب المسافات بدقة");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name,
+        address_text: form.address_text || null,
+        location_lat: Number(form.location_lat),
+        location_lng: Number(form.location_lng),
+        phone: form.phone || null,
+        whatsapp_number: form.whatsapp_number || null,
+        external_apply_url: form.external_apply_url || null,
+      };
+      const { error: saveError } = isEdit
+        ? await supabase.from("schools").update(payload).eq("id", school.id)
+        : await supabase.from("schools").insert(payload);
+      if (saveError) throw saveError;
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">{isEdit ? "تعديل بيانات المدرسة" : "إضافة مدرسة جديدة"}</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>اسم المدرسة</label>
+            <input className={inputClass} value={form.name} onChange={(e) => update("name", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>العنوان (نص وصفي)</label>
+            <input className={inputClass} value={form.address_text} onChange={(e) => update("address_text", e.target.value)} />
+          </div>
+          <LocationPicker
+            lat={form.location_lat === "" ? null : Number(form.location_lat)}
+            lng={form.location_lng === "" ? null : Number(form.location_lng)}
+            onChange={(newLat, newLng) => {
+              update("location_lat", newLat);
+              update("location_lng", newLng);
+            }}
+          />
+          <div>
+            <label className={labelClass}>رقم تليفون المدرسة</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>رقم واتساب (للتواصل بخصوص التقديم)</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.whatsapp_number} onChange={(e) => update("whatsapp_number", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>رابط خارجي للتقديم (اختياري)</label>
+            <input dir="ltr" className={inputClass + " text-left"} value={form.external_apply_url} onChange={(e) => update("external_apply_url", e.target.value)} />
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ الحفظ..." : isEdit ? "حفظ التعديلات" : "إضافة المدرسة"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SchoolsPage({ avatar }) {
+  const [schools, setSchools] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [modalSchool, setModalSchool] = useState(undefined); // undefined = مقفول، null = إضافة، object = تعديل
+
+  const loadSchools = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("schools")
+        .select("id, name, address_text, location_lat, location_lng, phone, whatsapp_number, is_active")
+        .order("name", { ascending: true });
+      if (fetchError) throw fetchError;
+      setSchools(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSchools();
+  }, [loadSchools]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">المدارس</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{schools.length} مدرسة مسجّلة</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setModalSchool(null)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + إضافة مدرسة
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : schools.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش مدارس مسجّلة لسه — دوس "إضافة مدرسة" عشان تبدأ</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {schools.map((s) => (
+              <div
+                key={s.id}
+                onClick={() => setModalSchool(s)}
+                className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer"
+              >
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.mint + "18" }}>
+                  <School size={16} color={COLORS.mint} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-gray-700">{s.name}</div>
+                  <div className="text-xs text-gray-400">{s.address_text || "بدون عنوان نصي"}{s.phone ? ` · ${s.phone}` : ""}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modalSchool !== undefined && (
+        <SchoolModal
+          school={modalSchool}
+          onClose={() => setModalSchool(undefined)}
+          onSaved={() => {
+            setModalSchool(undefined);
+            loadSchools();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= قسم الطلاب ================= */
+
+function StudentModal({ onClose, onCreated }) {
+  const [parentQuery, setParentQuery] = useState("");
+  const [parentResults, setParentResults] = useState([]);
+  const [selectedParent, setSelectedParent] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [schools, setSchools] = useState([]);
+  const [buses, setBuses] = useState([]);
+  const [form, setForm] = useState({
+    full_name: "",
+    grade: "",
+    school_id: "",
+    bus_id: "",
+    home_lat: "",
+    home_lng: "",
+    home_address_text: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadOptions() {
+      const [schoolsRes, busesRes] = await Promise.all([
+        supabase.from("schools").select("id, name").order("name"),
+        supabase.from("buses").select("id, bus_code, plate_number").eq("is_active", true).order("bus_code"),
+      ]);
+      setSchools(schoolsRes.data || []);
+      setBuses(busesRes.data || []);
+    }
+    loadOptions();
+  }, []);
+
+  async function searchParent() {
+    if (!parentQuery.trim()) return;
+    setSearching(true);
+    setError("");
+    try {
+      // إزالة الرموز اللي ممكن تكسر صيغة الفلترة (فاصلة، نجمة، أقواس)
+      const safeQuery = parentQuery.trim().replace(/[,*()]/g, "");
+      const { data, error: searchError } = await supabase
+        .from("profiles")
+        .select("id, full_name, phone, email")
+        .eq("role", "parent")
+        .or(`email.ilike.%${safeQuery}%,phone.ilike.%${safeQuery}%,full_name.ilike.%${safeQuery}%`)
+        .limit(5);
+      if (searchError) throw searchError;
+      setParentResults(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!selectedParent) {
+      setError("لازم تختار ولي الأمر الأول (ابحث بالبريد أو رقم التليفون)");
+      return;
+    }
+    if (!form.full_name || !form.school_id) {
+      setError("اسم الطالب والمدرسة مطلوبين");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const { error: insertError } = await supabase.from("students").insert({
+        parent_id: selectedParent.id,
+        school_id: form.school_id,
+        bus_id: form.bus_id || null,
+        full_name: form.full_name,
+        grade: form.grade || null,
+        home_lat: form.home_lat ? Number(form.home_lat) : null,
+        home_lng: form.home_lng ? Number(form.home_lng) : null,
+        home_address_text: form.home_address_text || null,
+      });
+      if (insertError) throw insertError;
+      onCreated();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">تسجيل طالب جديد</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="mb-4">
+          <label className={labelClass}>البحث عن ولي الأمر (بريد إلكتروني أو تليفون أو اسم)</label>
+          <div className="flex gap-2">
+            <input
+              dir="ltr"
+              className={inputClass + " text-left"}
+              value={parentQuery}
+              onChange={(e) => setParentQuery(e.target.value)}
+              placeholder="ابحث..."
+            />
+            <button
+              type="button"
+              onClick={searchParent}
+              disabled={searching}
+              className="rounded-xl px-4 text-sm font-bold text-white shrink-0"
+              style={{ backgroundColor: COLORS.sky }}
+            >
+              {searching ? <Loader2 size={16} className="animate-spin" /> : "بحث"}
+            </button>
+          </div>
+
+          {parentResults.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {parentResults.map((p) => (
+                <button
+                  type="button"
+                  key={p.id}
+                  onClick={() => {
+                    setSelectedParent(p);
+                    setParentResults([]);
+                    setParentQuery(p.full_name);
+                  }}
+                  className="text-right rounded-xl border border-gray-200 p-2.5 text-xs hover:bg-gray-50"
+                >
+                  <div className="font-semibold text-gray-700">{p.full_name}</div>
+                  <div className="text-gray-400" dir="ltr">{p.email || p.phone}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedParent && (
+            <div className="mt-2 rounded-xl bg-sky-50 border border-sky-100 p-2.5 text-xs text-sky-700">
+              ✓ ولي الأمر المختار: {selectedParent.full_name}
+            </div>
+          )}
+
+          {parentResults.length === 0 && !selectedParent && !searching && (
+            <div className="mt-2 text-[11px] text-gray-400">
+              لو مفيش نتايج، معناه ولي الأمر لسه مسجّلش في التطبيق (لازم يسجّل من تطبيق ولي الأمر الأول).
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>اسم الطالب</label>
+            <input className={inputClass} value={form.full_name} onChange={(e) => update("full_name", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>الصف الدراسي</label>
+            <input className={inputClass} value={form.grade} onChange={(e) => update("grade", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>المدرسة</label>
+            <select className={inputClass} value={form.school_id} onChange={(e) => update("school_id", e.target.value)}>
+              <option value="">اختر المدرسة...</option>
+              {schools.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>الباص (اختياري دلوقتي)</label>
+            <select className={inputClass} value={form.bus_id} onChange={(e) => update("bus_id", e.target.value)}>
+              <option value="">بدون تحديد باص الآن</option>
+              {buses.map((b) => (
+                <option key={b.id} value={b.id}>{b.bus_code} · {b.plate_number}</option>
+              ))}
+            </select>
+          </div>
+          <LocationPicker
+            lat={form.home_lat === "" ? null : Number(form.home_lat)}
+            lng={form.home_lng === "" ? null : Number(form.home_lng)}
+            onChange={(newLat, newLng) => {
+              update("home_lat", newLat);
+              update("home_lng", newLng);
+            }}
+          />
+          <div>
+            <label className={labelClass}>عنوان المنزل (نص وصفي)</label>
+            <input className={inputClass} value={form.home_address_text} onChange={(e) => update("home_address_text", e.target.value)} />
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ التسجيل..." : "تسجيل الطالب"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function StudentsPage({ avatar }) {
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  const loadStudents = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("students")
+        .select("id, full_name, grade, is_active, profiles(full_name), schools(name), buses(bus_code)")
+        .order("full_name", { ascending: true });
+      if (fetchError) throw fetchError;
+      setStudents(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStudents();
+  }, [loadStudents]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الطلاب</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{students.length} طالب مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + تسجيل طالب
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : students.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش طلاب مسجّلين لسه — دوس "تسجيل طالب" عشان تبدأ</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {students.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                  <Users size={16} color="#B7791F" />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-gray-700">
+                    {s.full_name}{s.grade ? ` · ${s.grade}` : ""}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    ولي الأمر: {s.profiles?.full_name || "—"} · {s.schools?.name || "بدون مدرسة"}
+                    {s.buses?.bus_code ? ` · ${s.buses.bus_code}` : " · بدون باص"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <StudentModal
+          onClose={() => setShowAddModal(false)}
+          onCreated={() => {
+            setShowAddModal(false);
+            loadStudents();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= الصفحة الرئيسية ================= */
+
+/* ================= قسم الاشتراكات ================= */
+
+const SUBSCRIPTION_STATUS_LABELS = {
+  active: { label: "نشط", color: COLORS.mint },
+  expired: { label: "منتهي", color: COLORS.orange },
+  cancelled: { label: "ملغي", color: "#9CA3AF" },
+  pending: { label: "بانتظار أول دفعة", color: COLORS.sun },
+};
+
+function AddSubscriptionModal({ onClose, onCreated }) {
+  const [students, setStudents] = useState([]);
+  const [form, setForm] = useState({ student_id: "", price: "", start_date: todayStr() });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadStudents() {
+      const { data } = await supabase.from("students").select("id, full_name, parent_id, profiles(full_name)").eq("is_active", true);
+      setStudents(data || []);
+    }
+    loadStudents();
+  }, []);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const student = students.find((s) => s.id === form.student_id);
+    if (!student || !form.price || !form.start_date) {
+      setError("لازم تختار الطالب وتحدد السعر وتاريخ البداية");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const startDate = new Date(form.start_date);
+      const renewalDate = new Date(startDate);
+      renewalDate.setMonth(renewalDate.getMonth() + 1); // دورة شهرية
+
+      const { error: insertError } = await supabase.from("subscriptions").insert({
+        parent_id: student.parent_id,
+        student_id: form.student_id,
+        price: Number(form.price),
+        start_date: form.start_date,
+        renewal_date: renewalDate.toISOString().slice(0, 10),
+        status: "active",
+      });
+      if (insertError) throw insertError;
+      onCreated();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">تسجيل اشتراك جديد</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>الطالب</label>
+            <select className={inputClass} value={form.student_id} onChange={(e) => update("student_id", e.target.value)}>
+              <option value="">اختر الطالب...</option>
+              {students.map((s) => (
+                <option key={s.id} value={s.id}>{s.full_name} · ولي الأمر: {s.profiles?.full_name}</option>
+              ))}
+            </select>
+            {students.length === 0 && <div className="text-[11px] text-gray-400 mt-1.5">مفيش طلاب مسجّلين لسه</div>}
+          </div>
+          <div>
+            <label className={labelClass}>سعر الاشتراك الشهري (جنيه)</label>
+            <input type="number" dir="ltr" className={inputClass + " text-left"} value={form.price} onChange={(e) => update("price", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelClass}>تاريخ بداية الاشتراك</label>
+            <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.start_date} onChange={(e) => update("start_date", e.target.value)} />
+            <div className="text-[11px] text-gray-400 mt-1.5">تاريخ التجديد هيتحدد تلقائياً بعد شهر من تاريخ البداية</div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70 mt-2"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {saving ? "جارٍ التسجيل..." : "تسجيل الاشتراك"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionDetailModal({ subscriptionId, onClose, onSaved }) {
+  const [subscription, setSubscription] = useState(null);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [recordingPayment, setRecordingPayment] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [subRes, invRes] = await Promise.all([
+        supabase.from("subscriptions").select("id, price, status, start_date, renewal_date, students(full_name), profiles(full_name)").eq("id", subscriptionId).single(),
+        supabase.from("invoices").select("id, invoice_number, amount, status, issued_at, paid_at").eq("subscription_id", subscriptionId).order("issued_at", { ascending: false }),
+      ]);
+      if (subRes.error) throw subRes.error;
+      if (invRes.error) throw invRes.error;
+      setSubscription(subRes.data);
+      setInvoices(invRes.data || []);
+      setPaymentAmount(String(subRes.data.price));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [subscriptionId]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  useEffect(() => {
-    if (!bus) return;
-    const channel = supabase
-      .channel("supervisor-home-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "trips", filter: `bus_id=eq.${bus.id}` }, () => loadData(true))
-      .on("postgres_changes", { event: "*", schema: "public", table: "trip_students" }, () => loadData(true))
-      .subscribe();
-    return () => supabase.removeChannel(channel);
-  }, [bus, loadData]);
-
-  function getLocationOnce() {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) return resolve(null);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => resolve(null),
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    });
-  }
-
-  async function handleStartTrip() {
-    if (!currentTrip) return;
-    setStartingTrip(true);
+  async function handleRecordPayment() {
+    if (!paymentAmount) return;
+    setRecordingPayment(true);
     setError("");
     try {
-      const loc = await getLocationOnce();
-      const { error: updateError } = await supabase
-        .from("trips")
-        .update({
-          status: "active",
-          started_at: new Date().toISOString(),
-          current_lat: loc?.lat ?? null,
-          current_lng: loc?.lng ?? null,
-          location_updated_at: loc ? new Date().toISOString() : null,
-        })
-        .eq("id", currentTrip.id);
-      if (updateError) throw updateError;
+      const { error: invoiceError } = await supabase.from("invoices").insert({
+        subscription_id: subscriptionId,
+        amount: Number(paymentAmount),
+        status: "paid",
+        paid_at: new Date().toISOString(),
+      });
+      if (invoiceError) throw invoiceError;
 
-      // حضور المشرفة تلقائي: تسجيل وقت الحضور لو لسه معملتش تسجيل النهاردة
-      const today = todayStr();
-      const { data: existingAttendance } = await supabase
-        .from("staff_attendance")
-        .select("id, check_in_at")
-        .eq("staff_id", profile.id)
-        .eq("work_date", today)
-        .maybeSingle();
-      if (!existingAttendance) {
-        await supabase.from("staff_attendance").insert({ staff_id: profile.id, work_date: today, check_in_at: new Date().toISOString() });
-      } else if (!existingAttendance.check_in_at) {
-        await supabase.from("staff_attendance").update({ check_in_at: new Date().toISOString() }).eq("id", existingAttendance.id);
-      }
+      const newRenewal = new Date(subscription.renewal_date);
+      newRenewal.setMonth(newRenewal.getMonth() + 1);
 
-      loadData(true);
+      const { error: subError } = await supabase
+        .from("subscriptions")
+        .update({ status: "active", renewal_date: newRenewal.toISOString().slice(0, 10) })
+        .eq("id", subscriptionId);
+      if (subError) throw subError;
+
+      loadData();
+      onSaved();
     } catch (err) {
       setError(err.message);
     } finally {
-      setStartingTrip(false);
+      setRecordingPayment(false);
     }
   }
 
-  async function handleEndTrip() {
-    if (!currentTrip) return;
-    setEndingTrip(true);
-    setError("");
-    try {
-      const { error: updateError } = await supabase
-        .from("trips")
-        .update({ status: "completed", ended_at: new Date().toISOString() })
-        .eq("id", currentTrip.id);
-      if (updateError) throw updateError;
-
-      const today = todayStr();
-      await supabase
-        .from("staff_attendance")
-        .update({ check_out_at: new Date().toISOString() })
-        .eq("staff_id", profile.id)
-        .eq("work_date", today);
-
-      loadData(true);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setEndingTrip(false);
-    }
-  }
-
-  async function handleUpdateLocationNow() {
-    if (!currentTrip || currentTrip.status !== "active") return;
-    const loc = await getLocationOnce();
-    if (!loc) return;
-    await supabase
-      .from("trips")
-      .update({ current_lat: loc.lat, current_lng: loc.lng, location_updated_at: new Date().toISOString() })
-      .eq("id", currentTrip.id);
-    loadData(true);
-  }
-
-  async function handleMarkStudent(ts, newStatus) {
-    try {
-      const payload = { status: newStatus, checked_at: new Date().toISOString() };
-      if (newStatus === "absent") payload.absence_type = "on_route";
-      const { error: updateError } = await supabase.from("trip_students").update(payload).eq("id", ts.id);
-      if (updateError) throw updateError;
-      setTripStudents((prev) => prev.map((t) => (t.id === ts.id ? { ...t, ...payload } : t)));
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  function openPhotoCapture(ts) {
-    pendingPhotoTs.current = ts;
-    fileInputRef.current?.click();
-  }
-
-  async function handlePhotoSelected(e) {
-    const file = e.target.files?.[0];
-    const ts = pendingPhotoTs.current;
-    e.target.value = "";
-    if (!file || !ts || !currentTrip) return;
-    setUploadingPhotoFor(ts.id);
-    try {
-      const path = `${currentTrip.id}/${ts.students?.id || ts.id}/${Date.now()}.jpg`;
-      const { error: uploadError } = await supabase.storage.from("trip-photos").upload(path, file, { contentType: file.type || "image/jpeg" });
-      if (uploadError) throw uploadError;
-      const { data: pub } = supabase.storage.from("trip-photos").getPublicUrl(path);
-      await supabase.from("trip_students").update({ photo_url: pub?.publicUrl || path, checked_at: new Date().toISOString() }).eq("id", ts.id);
-      loadData(true);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setUploadingPhotoFor(null);
-    }
-  }
-
-  const counts = tripStudents.reduce(
-    (acc, ts) => {
-      acc.total++;
-      if (ts.status === "boarded") acc.boarded++;
-      else if (ts.status === "dropped_off") acc.dropped++;
-      else if (ts.status === "absent") acc.absent++;
-      else acc.pending++;
-      return acc;
-    },
-    { total: 0, boarded: 0, dropped: 0, absent: 0, pending: 0 }
-  );
-
-  const busLat = currentTrip?.current_lat ?? gpsLoc?.lat;
-  const busLng = currentTrip?.current_lng ?? gpsLoc?.lng;
-
-  const sortedStops = [...tripStudents]
-    .filter((ts) => ts.status === "pending" || ts.status === "boarded")
-    .map((ts) => ({ ts, dist: distanceKm(busLat, busLng, ts.students?.home_lat, ts.students?.home_lng) }))
-    .sort((a, b) => a.dist - b.dist);
-
-  const doneStops = tripStudents.filter((ts) => ts.status === "dropped_off" || ts.status === "absent" || ts.status === "delayed");
-
-  useEffect(() => {
-    if (!currentTrip || currentTrip.status !== "active") return;
-    getLocationOnce().then((loc) => loc && setGpsLoc(loc));
-    const interval = setInterval(() => {
-      handleUpdateLocationNow();
-    }, 45000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTrip?.id, currentTrip?.status]);
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
 
   return (
-    <div className="pb-4">
-      <TopBar
-        title={`أهلاً، ${profile.full_name?.split(" ")[0] || ""}`}
-        subtitle={bus ? `${bus.bus_code} · ${bus.plate_number}` : "لسه مفيش باص مرتبط بحسابك"}
-        right={
-          <button onClick={() => loadData(true)} disabled={refreshing} className="rounded-xl border border-gray-200 p-2 text-gray-500 disabled:opacity-50">
-            <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
-          </button>
-        }
-      />
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" dir="rtl">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">{loading ? "جارٍ التحميل..." : subscription?.students?.full_name}</h3>
+          <button onClick={onClose} className="text-gray-400 text-xl leading-none px-2">×</button>
+        </div>
 
-      <ErrorBanner message={error} />
-
-      <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoSelected} />
-
-      <div className="px-4">
-        {loading ? (
-          <Spinner />
-        ) : !bus ? (
-          <div className="text-center py-14 text-sm text-gray-400 bg-white rounded-2xl border border-gray-100">
-            لسه معندكيش باص مسجّل على حسابك — تواصلي مع إدارة Bybus
+        {error && (
+          <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{error}</span>
           </div>
-        ) : !currentTrip ? (
-          <div className="text-center py-14 text-sm text-gray-400 bg-white rounded-2xl border border-gray-100">
-            مفيش رحلة مجدولة النهاردة على باصك دلوقتي
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
           </div>
         ) : (
           <>
-            <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
-                    <Bus size={18} color={COLORS.sky} />
+            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-500 mb-4 flex flex-col gap-1">
+              <div>ولي الأمر: {subscription.profiles?.full_name}</div>
+              <div>السعر الشهري: {subscription.price} جنيه</div>
+              <div>تاريخ التجديد القادم: {subscription.renewal_date}</div>
+            </div>
+
+            <div className="flex gap-2 mb-5">
+              <input
+                type="number"
+                dir="ltr"
+                value={paymentAmount}
+                onChange={(e) => setPaymentAmount(e.target.value)}
+                className={inputClass + " text-left"}
+              />
+              <button
+                onClick={handleRecordPayment}
+                disabled={recordingPayment}
+                className="rounded-xl px-4 text-white text-sm font-bold shrink-0 flex items-center gap-2 disabled:opacity-70"
+                style={{ backgroundColor: COLORS.orange }}
+              >
+                {recordingPayment && <Loader2 size={14} className="animate-spin" />}
+                تسجيل دفعة
+              </button>
+            </div>
+
+            <div className="text-xs font-bold text-gray-400 mb-2">سجل الفواتير</div>
+            {invoices.length === 0 ? (
+              <div className="text-center text-xs text-gray-400 py-6">لسه مفيش فواتير مسجّلة</div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {invoices.map((inv) => (
+                  <div key={inv.id} className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 text-xs">
+                    <div>
+                      <div className="font-semibold text-gray-700">{inv.invoice_number}</div>
+                      <div className="text-gray-400">{new Date(inv.issued_at).toLocaleDateString("ar-EG")}</div>
+                    </div>
+                    <div className="text-left">
+                      <div className="font-bold text-gray-700" dir="ltr">{inv.amount} جنيه</div>
+                      <div style={{ color: inv.status === "paid" ? COLORS.mint : COLORS.orange }}>
+                        {inv.status === "paid" ? "مدفوعة" : "معلّقة"}
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-sm font-bold text-gray-800">{currentTrip.trip_type === "morning" ? "رحلة الذهاب" : "رحلة العودة"}</div>
-                    <div className="text-xs text-gray-400">الموعد {currentTrip.scheduled_time?.slice(0, 5)}</div>
-                  </div>
-                </div>
-                <span
-                  className="text-[11px] font-bold px-2.5 py-1 rounded-full"
-                  style={{
-                    backgroundColor: (currentTrip.status === "active" ? COLORS.mint : "#9CA3AF") + "20",
-                    color: currentTrip.status === "active" ? COLORS.mint : "#6B7280",
-                  }}
-                >
-                  {currentTrip.status === "active" ? "الرحلة شغالة" : currentTrip.status === "delayed" ? "متأخرة" : "لسه ما بدأتش"}
-                </span>
+                ))}
               </div>
-
-              <div className="grid grid-cols-4 gap-2 mb-4 text-center">
-                <div className="bg-gray-50 rounded-xl py-2">
-                  <div className="text-sm font-bold text-gray-700">{counts.total}</div>
-                  <div className="text-[10px] text-gray-400">الكل</div>
-                </div>
-                <div className="bg-gray-50 rounded-xl py-2">
-                  <div className="text-sm font-bold" style={{ color: COLORS.mint }}>{counts.boarded + counts.dropped}</div>
-                  <div className="text-[10px] text-gray-400">مغادرين</div>
-                </div>
-                <div className="bg-gray-50 rounded-xl py-2">
-                  <div className="text-sm font-bold" style={{ color: "#9CA3AF" }}>{counts.pending}</div>
-                  <div className="text-[10px] text-gray-400">منتظرين</div>
-                </div>
-                <div className="bg-gray-50 rounded-xl py-2">
-                  <div className="text-sm font-bold" style={{ color: COLORS.danger }}>{counts.absent}</div>
-                  <div className="text-[10px] text-gray-400">غائبين</div>
-                </div>
-              </div>
-
-              {currentTrip.status !== "active" ? (
-                <button
-                  onClick={handleStartTrip}
-                  disabled={startingTrip}
-                  className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
-                  style={{ backgroundColor: COLORS.orange }}
-                >
-                  {startingTrip ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                  بدء الرحلة
-                </button>
-              ) : (
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleUpdateLocationNow}
-                    className="rounded-xl px-3.5 py-3 text-sm font-semibold border border-gray-200 text-gray-500 flex items-center gap-1.5"
-                    title="تحديث الموقع الآن"
-                  >
-                    <Navigation size={16} />
-                  </button>
-                  <button
-                    onClick={handleEndTrip}
-                    disabled={endingTrip}
-                    className="flex-1 rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
-                    style={{ backgroundColor: COLORS.danger }}
-                  >
-                    {endingTrip ? <Loader2 size={16} className="animate-spin" /> : <Square size={16} />}
-                    إنهاء الرحلة
-                  </button>
-                </div>
-              )}
-              {currentTrip.status === "active" && (
-                <div className="text-[11px] text-gray-400 mt-2 flex items-center gap-1.5">
-                  <MapPin size={12} />
-                  {currentTrip.current_lat ? "بيتم تحديث الموقع تلقائياً كل شوية" : "لسه مفيش موقع GPS محدث"}
-                </div>
-              )}
-            </div>
-
-            <div className="mb-2 text-xs font-bold text-gray-400 px-1">
-              محطات الطلاب {busLat != null ? "(الأقرب أولاً)" : "(بالترتيب المسجّل)"}
-            </div>
-            <div className="flex flex-col gap-2 mb-4">
-              {sortedStops.length === 0 ? (
-                <div className="text-center py-8 text-xs text-gray-400 bg-white rounded-2xl border border-gray-100">
-                  مفيش طلاب منتظرين دلوقتي
-                </div>
-              ) : (
-                sortedStops.map(({ ts, dist }) => (
-                  <StudentStopCard
-                    key={ts.id}
-                    ts={ts}
-                    distKm={busLat != null ? dist : Infinity}
-                    onMark={handleMarkStudent}
-                    onPhoto={openPhotoCapture}
-                    uploadingPhoto={uploadingPhotoFor}
-                  />
-                ))
-              )}
-            </div>
-
-            {doneStops.length > 0 && (
-              <>
-                <div className="mb-2 text-xs font-bold text-gray-400 px-1">تم التعامل معهم</div>
-                <div className="flex flex-col gap-2">
-                  {doneStops.map((ts) => (
-                    <StudentStopCard key={ts.id} ts={ts} distKm={Infinity} onMark={handleMarkStudent} onPhoto={openPhotoCapture} uploadingPhoto={uploadingPhotoFor} />
-                  ))}
-                </div>
-              </>
             )}
           </>
         )}
       </div>
-
-      {bus && <SosButton profile={profile} bus={bus} tripId={currentTrip?.id} />}
     </div>
   );
 }
 
-/* ================= صفحة الدردشة ================= */
+function SubscriptionsPage({ avatar }) {
+  const [subscriptions, setSubscriptions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
 
-function ChatThread({ conversationId, profile, onBack }) {
+  const loadSubscriptions = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("subscriptions")
+        .select("id, price, status, renewal_date, students(full_name), profiles(full_name)")
+        .order("renewal_date", { ascending: true });
+      if (fetchError) throw fetchError;
+      setSubscriptions(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSubscriptions();
+  }, [loadSubscriptions]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الاشتراكات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{subscriptions.length} اشتراك مسجّل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="rounded-xl px-4 py-2.5 text-white text-sm font-semibold"
+            style={{ backgroundColor: COLORS.orange }}
+          >
+            + تسجيل اشتراك
+          </button>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : subscriptions.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">مفيش اشتراكات مسجّلة لسه</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {subscriptions.map((s) => {
+              const statusInfo = SUBSCRIPTION_STATUS_LABELS[s.status] || { label: s.status, color: "#9CA3AF" };
+              return (
+                <div key={s.id} onClick={() => setSelectedId(s.id)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 cursor-pointer">
+                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                    <Receipt size={16} color="#B7791F" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">{s.students?.full_name}</div>
+                    <div className="text-xs text-gray-400">
+                      {s.profiles?.full_name} · {s.price} جنيه/شهرياً · التجديد {s.renewal_date}
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full" style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}>
+                    {statusInfo.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AddSubscriptionModal onClose={() => setShowAddModal(false)} onCreated={() => { setShowAddModal(false); loadSubscriptions(); }} />
+      )}
+
+      {selectedId && (
+        <SubscriptionDetailModal subscriptionId={selectedId} onClose={() => setSelectedId(null)} onSaved={loadSubscriptions} />
+      )}
+    </div>
+  );
+}
+
+/* ================= قسم الدردشة (صندوق الدعم الفني) ================= */
+
+function ChatThread({ conversationId, profile, onClaimed }) {
   const [conversation, setConversation] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const bottomRef = useRef(null);
+  const [claiming, setClaiming] = useState(false);
 
   const loadThread = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const [convRes, msgsRes] = await Promise.all([
-        supabase
-          .from("conversations")
-          .select("id, type, status, bus_id, participant_a_id, profiles!conversations_participant_a_id_fkey(full_name)")
-          .eq("id", conversationId)
-          .single(),
+        supabase.from("conversations").select("id, participant_a_id, participant_b_id, status, profiles!conversations_participant_a_id_fkey(full_name)").eq("id", conversationId).single(),
         supabase.from("messages").select("id, sender_id, content, created_at").eq("conversation_id", conversationId).order("created_at", { ascending: true }),
       ]);
       if (convRes.error) throw convRes.error;
@@ -1042,9 +2651,22 @@ function ChatThread({ conversationId, profile, onBack }) {
     return () => supabase.removeChannel(channel);
   }, [conversationId, loadThread]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+  async function handleClaim() {
+    setClaiming(true);
+    try {
+      const { error: claimError } = await supabase
+        .from("conversations")
+        .update({ participant_b_id: profile.id })
+        .eq("id", conversationId);
+      if (claimError) throw claimError;
+      loadThread();
+      onClaimed();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setClaiming(false);
+    }
+  }
 
   async function handleSend(e) {
     e.preventDefault();
@@ -1067,31 +2689,50 @@ function ChatThread({ conversationId, profile, onBack }) {
     }
   }
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-300">
+        <Loader2 size={22} className="animate-spin" />
+      </div>
+    );
+  }
+
+  const isClaimed = Boolean(conversation?.participant_b_id);
+  const isMine = conversation?.participant_b_id === profile.id;
+
   return (
-    <div className="flex flex-col h-[calc(100vh-64px)]">
-      <div className="p-4 border-b border-gray-100 flex items-center gap-2">
-        <button onClick={onBack} className="text-gray-400"><ChevronRight size={20} /></button>
-        <div className="font-semibold text-gray-700 text-sm">
-          {conversation?.type === "support" ? "الدعم الفني" : conversation?.profiles?.full_name || "ولي أمر"}
-        </div>
+    <div className="flex flex-col h-full">
+      <div className="p-4 border-b border-gray-100">
+        <div className="font-semibold text-gray-700 text-sm">{conversation?.profiles?.full_name || "مستخدم"}</div>
+        {!isClaimed && (
+          <button
+            onClick={handleClaim}
+            disabled={claiming}
+            className="mt-2 text-xs font-bold rounded-lg px-3 py-1.5 text-white flex items-center gap-1.5"
+            style={{ backgroundColor: COLORS.sky }}
+          >
+            {claiming && <Loader2 size={12} className="animate-spin" />}
+            استلام المحادثة
+          </button>
+        )}
+        {isClaimed && !isMine && <div className="mt-1 text-[11px] text-gray-400">المحادثة دي مستلمة من موظف تاني بالفعل</div>}
       </div>
 
-      <ErrorBanner message={error} />
+      {error && (
+        <div className="mx-4 mt-3 flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-4 flex flex-col gap-2">
-        {loading ? (
-          <Spinner />
-        ) : messages.length === 0 ? (
-          <div className="text-center text-xs text-gray-400 py-6">ابدئي المحادثة بإرسال أول رسالة</div>
+        {messages.length === 0 ? (
+          <div className="text-center text-xs text-gray-400 py-6">لسه مفيش رسايل في المحادثة دي</div>
         ) : (
           messages.map((m) => {
             const fromMe = m.sender_id === profile.id;
             return (
-              <div
-                key={m.id}
-                className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${fromMe ? "self-end text-white" : "self-start bg-gray-100 text-gray-700"}`}
-                style={fromMe ? { backgroundColor: COLORS.sky } : {}}
-              >
+              <div key={m.id} className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${fromMe ? "self-start text-white" : "self-end bg-gray-100 text-gray-700"}`} style={fromMe ? { backgroundColor: COLORS.sky } : {}}>
                 {m.content}
                 <div className={`text-[10px] mt-1 ${fromMe ? "text-white/70" : "text-gray-400"}`}>
                   {new Date(m.created_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
@@ -1100,143 +2741,107 @@ function ChatThread({ conversationId, profile, onBack }) {
             );
           })
         )}
-        <div ref={bottomRef} />
       </div>
 
       <form onSubmit={handleSend} className="p-4 border-t border-gray-100 flex gap-2">
         <input
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
-          placeholder="اكتبي رسالتك..."
-          className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+          disabled={!isMine}
+          placeholder={isMine ? "اكتب رسالتك..." : "استلم المحادثة الأول عشان تقدر ترد"}
+          className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300 disabled:bg-gray-50"
         />
         <button
           type="submit"
-          disabled={sending || !newMessage.trim()}
+          disabled={!isMine || sending || !newMessage.trim()}
           className="rounded-xl px-4 text-white text-sm font-bold disabled:opacity-50"
           style={{ backgroundColor: COLORS.orange }}
         >
-          {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+          {sending ? <Loader2 size={16} className="animate-spin" /> : "إرسال"}
         </button>
       </form>
     </div>
   );
 }
 
-function ChatPage({ profile, bus }) {
-  const [conversations, setConversations] = useState([]);
+/* ================= قسم التقييمات ================= */
+
+function RatingsPage({ avatar }) {
+  const [ratings, setRatings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selectedId, setSelectedId] = useState(null);
-  const [starting, setStarting] = useState(false);
-
-  const loadConversations = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      let query = supabase
-        .from("conversations")
-        .select("id, type, status, bus_id, participant_a_id, updated_at, profiles!conversations_participant_a_id_fkey(full_name)")
-        .order("updated_at", { ascending: false });
-
-      if (bus?.id) {
-        query = query.or(`and(type.eq.parent_supervisor,bus_id.eq.${bus.id}),and(type.eq.support,participant_a_id.eq.${profile.id})`);
-      } else {
-        query = query.eq("type", "support").eq("participant_a_id", profile.id);
-      }
-
-      const { data, error: fetchError } = await query;
-      if (fetchError) throw fetchError;
-      setConversations(data || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [bus?.id, profile.id]);
 
   useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
-
-  async function startSupportChat() {
-    setStarting(true);
-    setError("");
-    try {
-      const { data: existing } = await supabase
-        .from("conversations")
-        .select("id")
-        .eq("type", "support")
-        .eq("participant_a_id", profile.id)
-        .eq("status", "open")
-        .maybeSingle();
-
-      let convId = existing?.id;
-      if (!convId) {
-        const { data: created, error: createError } = await supabase
-          .from("conversations")
-          .insert({ type: "support", participant_a_id: profile.id })
-          .select("id")
-          .single();
-        if (createError) throw createError;
-        convId = created.id;
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("ratings")
+          .select("id, stars, comment, created_at, buses(bus_code, profiles(full_name))")
+          .order("created_at", { ascending: false });
+        if (fetchError) throw fetchError;
+        setRatings(data || []);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
-      await loadConversations();
-      setSelectedId(convId);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setStarting(false);
     }
-  }
+    load();
+  }, []);
 
-  if (selectedId) {
-    return <ChatThread conversationId={selectedId} profile={profile} onBack={() => setSelectedId(null)} />;
-  }
+  const avgStars = ratings.length ? (ratings.reduce((sum, r) => sum + r.stars, 0) / ratings.length).toFixed(1) : "—";
 
   return (
-    <div className="pb-4">
-      <TopBar title="الدردشة" subtitle={`${conversations.length} محادثة`} />
-      <ErrorBanner message={error} />
-
-      <div className="px-4 mb-3">
-        <button
-          onClick={startSupportChat}
-          disabled={starting}
-          className="w-full rounded-2xl py-3 text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-70"
-          style={{ backgroundColor: COLORS.orange }}
-        >
-          {starting && <Loader2 size={14} className="animate-spin" />}
-          + تواصل مع الدعم الفني
-        </button>
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">التقييمات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{ratings.length} تقييم من أولياء الأمور</p>
+        </div>
+        {avatar}
       </div>
 
-      <div className="px-4">
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-4 mb-6">
+        <KpiCard icon={Star} label="متوسط التقييم العام" value={avgStars} color={COLORS.sun} loading={loading} />
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
         {loading ? (
-          <Spinner />
-        ) : conversations.length === 0 ? (
-          <div className="text-center py-14 text-sm text-gray-400 bg-white rounded-2xl border border-gray-100">
-            مفيش محادثات لسه — هتظهر هنا أول ما ولي أمر يبدأ محادثة معاكي
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
           </div>
+        ) : ratings.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">لسه مفيش تقييمات من أولياء الأمور</div>
         ) : (
           <div className="flex flex-col gap-2">
-            {conversations.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setSelectedId(c.id)}
-                className="w-full text-right flex items-center gap-3 p-3.5 rounded-2xl bg-white border border-gray-100 hover:bg-gray-50"
-              >
-                <div className="rounded-lg p-2.5 shrink-0" style={{ backgroundColor: (c.type === "support" ? COLORS.orange : COLORS.sky) + "18" }}>
-                  <MessageCircle size={16} color={c.type === "support" ? COLORS.orange : COLORS.sky} />
+            {ratings.map((r) => (
+              <div key={r.id} className="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50">
+                <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sun + "25" }}>
+                  <Star size={16} color="#B7791F" />
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm font-semibold text-gray-700">
-                    {c.type === "support" ? "الدعم الفني" : c.profiles?.full_name || "ولي أمر"}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-gray-700">{r.buses?.bus_code}</span>
+                    <span className="text-xs text-gray-400">{r.buses?.profiles?.full_name}</span>
                   </div>
-                  <div className="text-[11px] text-gray-400">{c.status === "open" ? "مفتوحة" : "مقفولة"}</div>
+                  {r.comment && <div className="text-xs text-gray-500 mt-1">{r.comment}</div>}
+                  <div className="text-[10px] text-gray-400 mt-1">{new Date(r.created_at).toLocaleDateString("ar-EG")}</div>
                 </div>
-                <ChevronRight size={18} className="text-gray-300 shrink-0 rotate-180" />
-              </button>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Star key={i} size={13} color={i < r.stars ? COLORS.sun : "#E5E7EB"} fill={i < r.stars ? COLORS.sun : "none"} />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -1245,305 +2850,862 @@ function ChatPage({ profile, bus }) {
   );
 }
 
-/* ================= صفحة حسابي ================= */
+/* ================= قسم التنبيهات (الأرشيف الكامل) ================= */
 
-function ChangePasswordForm() {
-  const [password, setPassword] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (password.length < 6) {
-      setError("كلمة المرور لازم تكون 6 حروف/أرقام على الأقل");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setSaved(false);
-    try {
-      const { error: updateError } = await supabase.auth.updateUser({ password });
-      if (updateError) throw updateError;
-      setSaved(true);
-      setPassword("");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      {error && <ErrorBanner message={error} />}
-      {saved && (
-        <div className="flex items-center gap-2 bg-green-50 border border-green-100 text-green-600 text-xs rounded-xl p-3">
-          <CheckCircle2 size={16} className="shrink-0" /> تم تغيير كلمة المرور
-        </div>
-      )}
-      <input
-        type="password"
-        dir="ltr"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="كلمة المرور الجديدة"
-        className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-left focus:outline-none focus:ring-2 focus:ring-sky-300"
-      />
-      <button
-        type="submit"
-        disabled={saving}
-        className="w-full rounded-xl py-2.5 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
-        style={{ backgroundColor: COLORS.sky }}
-      >
-        {saving && <Loader2 size={16} className="animate-spin" />}
-        تغيير كلمة المرور
-      </button>
-    </form>
-  );
-}
-
-function LeaveRequestForm({ employee }) {
-  const [form, setForm] = useState({ start_date: "", end_date: "", reason: "" });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!employee?.id) {
-      setError("لسه معندكيش سجل موظف مربوط بالحساب، تواصلي مع الإدارة");
-      return;
-    }
-    if (!form.start_date || !form.end_date) {
-      setError("لازم تحددي تاريخ بداية ونهاية الإجازة");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      const { error: insertError } = await supabase.from("leave_requests").insert({
-        employee_id: employee.id,
-        start_date: form.start_date,
-        end_date: form.end_date,
-        reason: form.reason || null,
-        status: "pending",
-      });
-      if (insertError) throw insertError;
-      setSaved(true);
-      setForm({ start_date: "", end_date: "", reason: "" });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const inputClass = "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
-
-  return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      {error && <ErrorBanner message={error} />}
-      {saved && (
-        <div className="flex items-center gap-2 bg-green-50 border border-green-100 text-green-600 text-xs rounded-xl p-3">
-          <CheckCircle2 size={16} className="shrink-0" /> تم إرسال طلب الإجازة للإدارة للمراجعة
-        </div>
-      )}
-      <div className="grid grid-cols-2 gap-2">
-        <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.start_date} onChange={(e) => setForm((p) => ({ ...p, start_date: e.target.value }))} />
-        <input type="date" dir="ltr" className={inputClass + " text-left"} value={form.end_date} onChange={(e) => setForm((p) => ({ ...p, end_date: e.target.value }))} />
-      </div>
-      <input className={inputClass} placeholder="السبب (اختياري)" value={form.reason} onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))} />
-      <button
-        type="submit"
-        disabled={saving}
-        className="w-full rounded-xl py-2.5 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
-        style={{ backgroundColor: COLORS.sky }}
-      >
-        {saving && <Loader2 size={16} className="animate-spin" />}
-        إرسال طلب الإجازة
-      </button>
-    </form>
-  );
-}
-
-function AccountPage({ profile, bus }) {
-  const [employee, setEmployee] = useState(null);
-  const [stats, setStats] = useState({ tripsCompleted: 0, avgRating: null, ratingsCount: 0 });
-  const [supportPhone, setSupportPhone] = useState("");
+function AlertsPage({ profile, avatar }) {
+  const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [section, setSection] = useState("profile");
+  const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState("open");
+  const [resolvingId, setResolvingId] = useState(null);
+
+  const loadAlerts = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      let query = supabase
+        .from("alerts")
+        .select("id, type, message, status, created_at, resolved_at, buses(bus_code)")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (statusFilter !== "all") query = query.eq("status", statusFilter);
+      const { data, error: fetchError } = await query;
+      if (fetchError) throw fetchError;
+      setAlerts(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter]);
+
+  useEffect(() => {
+    loadAlerts();
+  }, [loadAlerts]);
+
+  async function handleResolve(alertId) {
+    setResolvingId(alertId);
+    try {
+      const { error: updateError } = await supabase
+        .from("alerts")
+        .update({ status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() })
+        .eq("id", alertId);
+      if (updateError) throw updateError;
+      loadAlerts();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">التنبيهات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{alerts.length} تنبيه</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm">
+            <option value="open">معلّقة فقط</option>
+            <option value="resolved">تم حلها</option>
+            <option value="all">الكل</option>
+          </select>
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : alerts.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 text-sm text-gray-400 py-10 text-center">
+            <CheckCircle2 size={20} color={COLORS.mint} />
+            مفيش تنبيهات في القسم ده
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {alerts.map((a) => {
+              const isUrgent = a.type === "sos";
+              return (
+                <div key={a.id} className={`flex items-center gap-3 p-3 rounded-xl border ${isUrgent && a.status === "open" ? "border-red-100 bg-red-50" : "border-gray-100"}`}>
+                  <AlertTriangle size={16} color={isUrgent && a.status === "open" ? COLORS.danger : COLORS.orange} className="shrink-0" />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">{ALERT_LABELS[a.type] || a.type}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{a.message}</div>
+                    <div className="text-[10px] text-gray-400 mt-1 flex items-center gap-2">
+                      <span>{a.buses?.bus_code || "—"}</span>
+                      <span>{new Date(a.created_at).toLocaleString("ar-EG", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</span>
+                    </div>
+                  </div>
+                  {a.status === "open" ? (
+                    <button
+                      onClick={() => handleResolve(a.id)}
+                      disabled={resolvingId === a.id}
+                      className="text-[11px] font-bold px-3 py-1.5 rounded-full text-white shrink-0 disabled:opacity-50"
+                      style={{ backgroundColor: COLORS.sky }}
+                    >
+                      {resolvingId === a.id ? <Loader2 size={12} className="animate-spin" /> : "تم الحل"}
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-bold px-3 py-1.5 rounded-full shrink-0" style={{ backgroundColor: COLORS.mint + "20", color: COLORS.mint }}>
+                      محلول
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChatPage({ profile, avatar }) {
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+
+  const loadConversations = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("conversations")
+        .select("id, status, participant_b_id, updated_at, profiles!conversations_participant_a_id_fkey(full_name)")
+        .eq("type", "support")
+        .order("updated_at", { ascending: false });
+      if (fetchError) throw fetchError;
+      setConversations(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">صندوق الدعم الفني</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{conversations.length} محادثة</p>
+        </div>
+        {avatar}
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden" style={{ height: 520 }}>
+        <div className="flex h-full">
+          <div className="w-72 border-l border-gray-100 overflow-auto shrink-0">
+            {loading ? (
+              <div className="flex items-center justify-center h-full text-gray-300">
+                <Loader2 size={22} className="animate-spin" />
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="text-center text-xs text-gray-400 p-6">
+                مفيش محادثات دعم لسه — هتظهر هنا أول ما مستخدم يبعت رسالة من تطبيق المشرفة أو ولي الأمر
+              </div>
+            ) : (
+              conversations.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedId(c.id)}
+                  className={`w-full text-right p-3.5 border-b border-gray-50 hover:bg-gray-50 ${selectedId === c.id ? "bg-sky-50" : ""}`}
+                >
+                  <div className="text-sm font-semibold text-gray-700">{c.profiles?.full_name || "مستخدم"}</div>
+                  <div className="text-[11px] text-gray-400 mt-0.5">
+                    {c.participant_b_id ? "مستلمة" : "بانتظار الاستلام"}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="flex-1">
+            {selectedId ? (
+              <ChatThread conversationId={selectedId} profile={profile} onClaimed={loadConversations} />
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-gray-300">اختر محادثة من القايمة</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= قسم الرحلات ================= */
+
+function TripsPage({ avatar }) {
+  const [trips, setTrips] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [dateFilter, setDateFilter] = useState(todayStr());
+  const [updatingId, setUpdatingId] = useState(null);
+
+  const loadTrips = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("trips")
+        .select(
+          "id, trip_type, status, scheduled_time, started_at, ended_at, buses(bus_code, plate_number, profiles(full_name))"
+        )
+        .eq("trip_date", dateFilter)
+        .order("scheduled_time", { ascending: true });
+      if (fetchError) throw fetchError;
+      setTrips(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [dateFilter]);
+
+  useEffect(() => {
+    loadTrips();
+  }, [loadTrips]);
+
+  async function markCancelled(tripId) {
+    setUpdatingId(tripId);
+    try {
+      const { error: updateError } = await supabase.from("trips").update({ status: "cancelled" }).eq("id", tripId);
+      if (updateError) throw updateError;
+      setTrips((prev) => prev.map((t) => (t.id === tripId ? { ...t, status: "cancelled" } : t)));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الرحلات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{trips.length} رحلة في اليوم المحدد</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="date"
+            dir="ltr"
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+            className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-left"
+          />
+          {avatar}
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
+          </div>
+        ) : trips.length === 0 ? (
+          <div className="text-center py-10 text-sm text-gray-400">
+            مفيش رحلات في اليوم ده — الرحلات بتتولد تلقائياً من مواعيد الباصات الأسبوعية
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {trips.map((t) => {
+              const statusInfo = STATUS_LABELS[t.status] || { label: t.status, color: "#9CA3AF" };
+              return (
+                <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                  <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
+                    <Bus size={16} color={COLORS.sky} />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-gray-700">
+                      {t.buses?.bus_code || "—"} · {t.trip_type === "morning" ? "ذهاب" : "عودة"}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {t.buses?.profiles?.full_name || "بدون مشرفة"} · الموعد {t.scheduled_time?.slice(0, 5)}
+                      {t.started_at && ` · بدأت ${new Date(t.started_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}`}
+                      {t.ended_at && ` · انتهت ${new Date(t.ended_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}`}
+                    </div>
+                  </div>
+                  <span
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                    style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
+                  >
+                    {statusInfo.label}
+                  </span>
+                  {(t.status === "scheduled" || t.status === "delayed") && (
+                    <button
+                      onClick={() => markCancelled(t.id)}
+                      disabled={updatingId === t.id}
+                      className="text-[11px] font-bold text-gray-400 hover:text-red-500 disabled:opacity-50"
+                    >
+                      {updatingId === t.id ? <Loader2 size={12} className="animate-spin" /> : "إلغاء"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= قسم الإعدادات ================= */
+
+function SettingsPage({ avatar }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [form, setForm] = useState({ company_name: "", support_phone: "", trip_delay_grace_minutes: 15 });
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
-        const [empRes, settingsRes] = await Promise.all([
-          supabase.from("employees").select("id, employee_code, job_title, employment_status, hire_date").eq("profile_id", profile.id).maybeSingle(),
-          supabase.from("app_settings").select("support_phone").single(),
-        ]);
-        setEmployee(empRes.data || null);
-        setSupportPhone(settingsRes.data?.support_phone || "");
-
-        if (bus?.id) {
-          const [tripsRes, ratingsRes] = await Promise.all([
-            supabase.from("trips").select("id", { count: "exact", head: true }).eq("bus_id", bus.id).eq("status", "completed"),
-            supabase.from("ratings").select("stars").eq("bus_id", bus.id),
-          ]);
-          const ratings = ratingsRes.data || [];
-          setStats({
-            tripsCompleted: tripsRes.count || 0,
-            avgRating: ratings.length ? (ratings.reduce((s, r) => s + r.stars, 0) / ratings.length).toFixed(1) : null,
-            ratingsCount: ratings.length,
-          });
-        }
+        const { data, error: fetchError } = await supabase
+          .from("app_settings")
+          .select("company_name, support_phone, trip_delay_grace_minutes")
+          .single();
+        if (fetchError) throw fetchError;
+        setForm({
+          company_name: data.company_name || "",
+          support_phone: data.support_phone || "",
+          trip_delay_grace_minutes: data.trip_delay_grace_minutes ?? 15,
+        });
+      } catch (err) {
+        setError(err.message);
       } finally {
         setLoading(false);
       }
     }
     load();
-  }, [profile.id, bus?.id]);
+  }, []);
 
-  const tabs = [
-    { key: "profile", label: "بياناتي" },
-    { key: "leave", label: "طلب إجازة" },
-  ];
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+    setSaved(false);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase
+        .from("app_settings")
+        .update({
+          company_name: form.company_name,
+          support_phone: form.support_phone || null,
+          trip_delay_grace_minutes: Number(form.trip_delay_grace_minutes),
+        })
+        .eq("id", true);
+      if (updateError) throw updateError;
+      setSaved(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300";
+  const labelClass = "block text-xs font-medium text-gray-500 mb-1.5";
 
   return (
-    <div className="pb-4">
-      <TopBar title="حسابي" subtitle={profile.full_name} />
-
-      <div className="px-4 flex gap-2 mb-4 overflow-auto no-scrollbar">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setSection(t.key)}
-            className="rounded-full px-4 py-2 text-xs font-bold shrink-0"
-            style={section === t.key ? { backgroundColor: COLORS.sky, color: "white" } : { backgroundColor: "#F3F4F6", color: "#6B7280" }}
-          >
-            {t.label}
-          </button>
-        ))}
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">الإعدادات</h1>
+          <p className="text-sm text-gray-400 mt-0.5">إعدادات عامة للنظام</p>
+        </div>
+        {avatar}
       </div>
 
-      <div className="px-4">
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {saved && (
+        <div className="flex items-center gap-2 bg-green-50 border border-green-100 text-green-600 text-xs rounded-xl p-3 mb-4">
+          <CheckCircle2 size={16} className="shrink-0" />
+          <span>تم حفظ الإعدادات بنجاح</span>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 p-5 max-w-lg">
         {loading ? (
-          <Spinner />
-        ) : (
-          <div className="bg-white rounded-2xl border border-gray-100 p-4">
-            {section === "profile" && (
-              <div className="flex flex-col gap-5">
-                <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600 flex flex-col gap-1.5">
-                  <div>الاسم: {profile.full_name}</div>
-                  <div dir="ltr" className="text-right">التليفون: {profile.phone || "—"}</div>
-                  {employee?.employee_code && <div dir="ltr" className="text-right">كود الموظف: {employee.employee_code}</div>}
-                  {employee?.job_title && <div>المسمى الوظيفي: {employee.job_title}</div>}
-                  {bus && (
-                    <>
-                      <div>الباص: {bus.bus_code} · {bus.plate_number}</div>
-                      {bus.company_name && <div>الشركة: {bus.company_name}</div>}
-                    </>
-                  )}
-                  <div className="text-[10px] text-gray-400 mt-1">تعديل البيانات الأساسية من صلاحية الإدارة فقط.</div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 rounded-xl p-3 text-center">
-                    <div className="text-lg font-bold text-gray-700">{stats.tripsCompleted}</div>
-                    <div className="text-[10px] text-gray-400">رحلة منجزة</div>
-                  </div>
-                  <div className="bg-gray-50 rounded-xl p-3 text-center flex flex-col items-center">
-                    <div className="flex items-center gap-1">
-                      <Star size={14} color={COLORS.sun} fill={COLORS.sun} />
-                      <span className="text-lg font-bold text-gray-700">{stats.avgRating ?? "—"}</span>
-                    </div>
-                    <div className="text-[10px] text-gray-400">{stats.ratingsCount} تقييم</div>
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-100 pt-4">
-                  <div className="text-xs font-bold text-gray-400 mb-3">تغيير كلمة المرور</div>
-                  <ChangePasswordForm />
-                </div>
-              </div>
-            )}
-
-            {section === "leave" && <LeaveRequestForm employee={employee} />}
+          <div className="flex items-center justify-center py-10 text-gray-300">
+            <Loader2 size={22} className="animate-spin" />
           </div>
-        )}
+        ) : (
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div>
+              <label className={labelClass}>اسم الشركة/المنشأة</label>
+              <input className={inputClass} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>رقم الدعم الفني</label>
+              <input dir="ltr" className={inputClass + " text-left"} value={form.support_phone} onChange={(e) => update("support_phone", e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>فترة الأمان قبل اعتبار الرحلة متأخرة (بالدقايق)</label>
+              <input
+                type="number"
+                dir="ltr"
+                min="1"
+                className={inputClass + " text-left"}
+                value={form.trip_delay_grace_minutes}
+                onChange={(e) => update("trip_delay_grace_minutes", e.target.value)}
+              />
+              <div className="text-[11px] text-gray-400 mt-1.5">
+                لو الرحلة عدّت ميعادها بالمدة دي ولسه ما بدأتش، النظام يعلّمها "متأخرة" ويبعت تنبيه للإدارة تلقائياً (بيتفحص كل 5 دقايق).
+              </div>
+            </div>
 
-        {supportPhone && (
-          <a href={`tel:${supportPhone}`} className="mt-3 w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-bold border border-gray-200 text-gray-600">
-            <PhoneCall size={16} /> اتصال بالدعم الفني ({supportPhone})
-          </a>
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full rounded-xl py-3 text-white font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+              style={{ backgroundColor: COLORS.orange }}
+            >
+              {saving && <Loader2 size={16} className="animate-spin" />}
+              {saving ? "جارٍ الحفظ..." : "حفظ الإعدادات"}
+            </button>
+          </form>
         )}
-
-        <button
-          onClick={() => supabase.auth.signOut()}
-          className="mt-3 w-full flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-bold text-red-500 border border-red-100 bg-red-50"
-        >
-          <LogOut size={16} /> تسجيل الخروج
-        </button>
       </div>
     </div>
-  );
-}
-
-/* ================= الهيكل الرئيسي (Bottom Nav) ================= */
-
-function BottomNav({ page, setPage }) {
-  const items = [
-    { key: "home", label: "الرئيسية", icon: Home },
-    { key: "chat", label: "الدردشة", icon: MessageCircle },
-    { key: "account", label: "حسابي", icon: User },
-  ];
-  return (
-    <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-100 flex items-stretch z-40" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-      {items.map((it) => {
-        const Icon = it.icon;
-        const active = page === it.key;
-        return (
-          <button key={it.key} onClick={() => setPage(it.key)} className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5">
-            <Icon size={20} color={active ? COLORS.sky : "#9CA3AF"} />
-            <span className="text-[10px] font-bold" style={{ color: active ? COLORS.sky : "#9CA3AF" }}>{it.label}</span>
-          </button>
-        );
-      })}
-    </nav>
   );
 }
 
 function Dashboard({ profile }) {
   const [page, setPage] = useState("home");
-  const [bus, setBus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [trips, setTrips] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [studentsTransported, setStudentsTransported] = useState(0);
+  const [totalBuses, setTotalBuses] = useState(0);
+  const [resolvingId, setResolvingId] = useState(null);
+
+  const loadData = useCallback(async (isRefresh = false) => {
+    isRefresh ? setRefreshing(true) : setLoading(true);
+    setError("");
+    try {
+      const today = todayStr();
+
+      const [tripsRes, alertsRes, busesRes, transportedRes] = await Promise.all([
+        supabase
+          .from("trips")
+          .select("id, trip_type, status, scheduled_time, started_at, ended_at, buses(bus_code, plate_number, profiles(full_name))")
+          .eq("trip_date", today)
+          .order("scheduled_time", { ascending: true }),
+        supabase
+          .from("alerts")
+          .select("id, type, message, status, created_at, buses(bus_code)")
+          .eq("status", "open")
+          .order("created_at", { ascending: false }),
+        supabase.from("buses").select("id", { count: "exact", head: true }).eq("is_active", true),
+        supabase
+          .from("trip_students")
+          .select("student_id, trips!inner(trip_date)")
+          .eq("trips.trip_date", today)
+          .in("status", ["boarded", "dropped_off"]),
+      ]);
+
+      if (tripsRes.error) throw tripsRes.error;
+      if (alertsRes.error) throw alertsRes.error;
+      if (busesRes.error) throw busesRes.error;
+      if (transportedRes.error) throw transportedRes.error;
+
+      setTrips(tripsRes.data || []);
+      setAlerts(alertsRes.data || []);
+      setTotalBuses(busesRes.count || 0);
+      setStudentsTransported(new Set((transportedRes.data || []).map((r) => r.student_id)).size);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function loadBus() {
-      const { data } = await supabase.from("buses").select("id, bus_code, plate_number, company_name").eq("supervisor_id", profile.id).maybeSingle();
-      setBus(data || null);
+    loadData();
+
+    // تحديث لحظي حقيقي: أي تغيير في الرحلات أو التنبيهات يوصل فوراً
+    const channel = supabase
+      .channel("dashboard-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => loadData(true))
+      .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => loadData(true))
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadData]);
+
+  async function handleResolveAlert(alertId) {
+    setResolvingId(alertId);
+    try {
+      const { error: updateError } = await supabase
+        .from("alerts")
+        .update({ status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() })
+        .eq("id", alertId);
+      if (updateError) throw updateError;
+      setAlerts((prev) => prev.filter((a) => a.id !== alertId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResolvingId(null);
     }
-    loadBus();
-  }, [profile.id]);
+  }
+
+  const activeTripsCount = trips.filter((t) => t.status === "active").length;
+  const activeBusesNow = new Set(trips.filter((t) => t.status === "active").map((t) => t.buses?.bus_code)).size;
+  const initials = profile.full_name ? profile.full_name.trim().slice(0, 2) : "إد";
 
   return (
-    <div className="min-h-screen bg-gray-50" dir="rtl">
-      <div style={{ paddingBottom: 70 }}>
-        {page === "home" && <HomePage profile={profile} />}
-        {page === "chat" && <ChatPage profile={profile} bus={bus} />}
-        {page === "account" && <AccountPage profile={profile} bus={bus} />}
-      </div>
-      <BottomNav page={page} setPage={setPage} />
+    <div className="min-h-screen bg-gray-50 flex" dir="rtl">
+      <aside className="w-64 bg-white border-l border-gray-100 flex flex-col p-4 shrink-0">
+        <div className="flex items-center gap-2.5 px-2 mb-8 mt-2">
+          <BybusMark size={34} />
+          <span className="font-bold text-gray-800 text-lg">Bybus</span>
+        </div>
+
+        <nav className="flex flex-col gap-1">
+          <NavItem icon={Home} label="الرئيسية" active={page === "home"} onClick={() => setPage("home")} />
+          <NavItem icon={Bus} label="الباصات" active={page === "buses"} onClick={() => setPage("buses")} />
+          <NavItem icon={UserCog} label="الموظفين" active={page === "employees"} onClick={() => setPage("employees")} />
+          <NavItem icon={Users} label="الطلاب" active={page === "students"} onClick={() => setPage("students")} />
+          <NavItem icon={School} label="المدارس" active={page === "schools"} onClick={() => setPage("schools")} />
+          <NavItem icon={MapPin} label="الرحلات" active={page === "trips"} onClick={() => setPage("trips")} />
+          <NavItem icon={MessageCircle} label="الدردشة" active={page === "chat"} onClick={() => setPage("chat")} />
+          <NavItem icon={AlertTriangle} label="التنبيهات" active={page === "alerts"} onClick={() => setPage("alerts")} />
+          <NavItem icon={Receipt} label="الاشتراكات" active={page === "subscriptions"} onClick={() => setPage("subscriptions")} />
+          <NavItem icon={Star} label="التقييمات" active={page === "ratings"} onClick={() => setPage("ratings")} />
+        </nav>
+
+        <div className="mt-auto flex flex-col gap-1">
+          <NavItem icon={Settings} label="الإعدادات" active={page === "settings"} onClick={() => setPage("settings")} />
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-gray-400 hover:bg-gray-50"
+          >
+            <LogOut size={18} />
+            <span className="flex-1 text-right">تسجيل الخروج</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 p-6 overflow-auto">
+        {page === "buses" ? (
+          <BusesPage
+            profile={profile}
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "employees" ? (
+          <EmployeesPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "schools" ? (
+          <SchoolsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "students" ? (
+          <StudentsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "subscriptions" ? (
+          <SubscriptionsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "ratings" ? (
+          <RatingsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "alerts" ? (
+          <AlertsPage
+            profile={profile}
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "chat" ? (
+          <ChatPage
+            profile={profile}
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "trips" ? (
+          <TripsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : page === "settings" ? (
+          <SettingsPage
+            avatar={
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: COLORS.mint }}
+                title={profile.full_name}
+              >
+                {initials}
+              </div>
+            }
+          />
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h1 className="text-xl font-bold text-gray-800">نظرة عامة</h1>
+                <p className="text-sm text-gray-400 mt-0.5">
+                  {new Date().toLocaleDateString("ar-EG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => loadData(true)}
+                  disabled={refreshing}
+                  className="rounded-xl border border-gray-200 p-2.5 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                  title="تحديث البيانات"
+                >
+                  <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+                </button>
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm"
+                  style={{ backgroundColor: COLORS.mint }}
+                  title={profile.full_name}
+                >
+                  {initials}
+                </div>
+              </div>
+            </div>
+
+            {error && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl p-3 mb-4">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-4 mb-6">
+              <KpiCard icon={Bus} label="حافلات نشطة الآن" value={activeBusesNow} color={COLORS.sky} sub={`من إجمالي ${totalBuses}`} loading={loading} />
+              <KpiCard icon={MapPin} label="رحلات جارية" value={activeTripsCount} color={COLORS.mint} sub={`${trips.length} رحلة مجدولة اليوم`} loading={loading} />
+              <KpiCard icon={Users} label="طلاب منقولون اليوم" value={studentsTransported} color={COLORS.sun} loading={loading} />
+              <KpiCard icon={AlertTriangle} label="تنبيهات معلقة" value={alerts.length} color={COLORS.orange} sub={alerts.length > 0 ? "يحتاج مراجعة" : ""} loading={loading} />
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2 bg-white rounded-2xl border border-gray-100 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-bold text-gray-800 text-sm">جدول الرحلات اليومية</h2>
+                  <span className="text-xs text-gray-400">{trips.length} رحلة</span>
+                </div>
+
+                {loading ? (
+                  <div className="flex items-center justify-center py-10 text-gray-300">
+                    <Loader2 size={22} className="animate-spin" />
+                  </div>
+                ) : trips.length === 0 ? (
+                  <div className="text-center py-10 text-sm text-gray-400">مفيش رحلات مجدولة النهاردة</div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {trips.map((t) => {
+                      const statusInfo = STATUS_LABELS[t.status] || { label: t.status, color: "#9CA3AF" };
+                      return (
+                        <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50">
+                          <div className="rounded-lg p-2" style={{ backgroundColor: COLORS.sky + "18" }}>
+                            <Bus size={16} color={COLORS.sky} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-sm font-semibold text-gray-700">
+                              {t.buses?.bus_code || "—"} · {t.trip_type === "morning" ? "ذهاب" : "عودة"}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {t.buses?.profiles?.full_name || "بدون مشرفة"} · الموعد {t.scheduled_time?.slice(0, 5)}
+                            </div>
+                          </div>
+                          <span
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                            style={{ backgroundColor: statusInfo.color + "20", color: statusInfo.color }}
+                          >
+                            {statusInfo.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 p-5">
+                <h2 className="font-bold text-gray-800 text-sm mb-4">التنبيهات الفورية</h2>
+
+                {loading ? (
+                  <div className="flex items-center justify-center py-10 text-gray-300">
+                    <Loader2 size={22} className="animate-spin" />
+                  </div>
+                ) : alerts.length === 0 ? (
+                  <div className="flex flex-col items-center gap-2 text-xs text-gray-400 py-8 text-center">
+                    <CheckCircle2 size={20} color={COLORS.mint} />
+                    كل الرحلات تسير بشكل طبيعي، مفيش تنبيهات معلقة
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {alerts.map((a) => {
+                      const isUrgent = a.type === "sos";
+                      return (
+                        <div
+                          key={a.id}
+                          className={`p-3 rounded-xl border ${isUrgent ? "border-red-100 bg-red-50" : "border-gray-100"}`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <div className="flex items-center gap-2">
+                              <AlertTriangle size={14} color={isUrgent ? COLORS.danger : COLORS.orange} />
+                              <span className={`text-xs font-bold ${isUrgent ? "text-red-500" : "text-gray-700"}`}>
+                                {ALERT_LABELS[a.type] || a.type}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handleResolveAlert(a.id)}
+                              disabled={resolvingId === a.id}
+                              className="text-[10px] font-bold text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                            >
+                              {resolvingId === a.id ? <Loader2 size={12} className="animate-spin" /> : "تم الحل"}
+                            </button>
+                          </div>
+                          <div className="text-[11px] text-gray-400 flex items-center gap-2">
+                            <span>{a.buses?.bus_code || "—"}</span>
+                            <span className="flex items-center gap-1">
+                              <Clock size={10} />
+                              {new Date(a.created_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
     </div>
   );
 }
 
-/* ================= الجذر ================= */
+/* ================= الجذر: بيدير الجلسة تلقائياً عن طريق Supabase ================= */
 
 export default function App() {
-  const [session, setSession] = useState(undefined);
+  const [session, setSession] = useState(undefined); // undefined = لسه بنتحقق
   const [profile, setProfile] = useState(null);
-  const [bus, setBus] = useState(null);
-  const [faceChecked, setFaceChecked] = useState(false);
 
   useEffect(() => {
     async function loadProfileForSession(currentSession) {
@@ -1554,11 +3716,11 @@ export default function App() {
       }
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, phone, role, face_reference_url")
+        .select("id, full_name, role, admin_permission")
         .eq("id", currentSession.user.id)
         .single();
 
-      if (error || !data || data.role !== "supervisor") {
+      if (error || !data || data.role !== "admin") {
         await supabase.auth.signOut();
         setSession(null);
         setProfile(null);
@@ -1566,27 +3728,18 @@ export default function App() {
       }
       setProfile(data);
       setSession(currentSession);
-
-      const { data: busData } = await supabase.from("buses").select("id").eq("supervisor_id", data.id).maybeSingle();
-      setBus(busData || null);
-
-      const flagKey = `bybus_face_checked_${data.id}`;
-      setFaceChecked(sessionStorage.getItem(flagKey) === "1");
     }
 
+    // بيتحقق من الجلسة المخزنة أول ما التطبيق يفتح (Auto Login الحقيقي)
     supabase.auth.getSession().then(({ data }) => loadProfileForSession(data.session));
 
+    // بيتابع أي تغيير في الجلسة (دخول/خروج/تجديد تلقائي للـ Token)
     const { data: listener } = supabase.auth.onAuthStateChange((_event, currentSession) => {
       loadProfileForSession(currentSession);
     });
 
     return () => listener.subscription.unsubscribe();
   }, []);
-
-  function handleFaceCheckDone() {
-    if (profile) sessionStorage.setItem(`bybus_face_checked_${profile.id}`, "1");
-    setFaceChecked(true);
-  }
 
   if (session === undefined) {
     return (
@@ -1596,11 +3749,5 @@ export default function App() {
     );
   }
 
-  if (!session || !profile) return <LoginScreen />;
-
-  if (!faceChecked) {
-    return <FaceCheckScreen profile={profile} bus={bus} onDone={handleFaceCheckDone} />;
-  }
-
-  return <Dashboard profile={profile} />;
+  return session && profile ? <Dashboard profile={profile} /> : <LoginScreen />;
 }
